@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     api_keys: str = "dev-operator:operator,dev-approver:approver,dev-field:field"
     cors_origins: str = "http://localhost:8080,http://localhost:8081,http://localhost:8082"
 
+    # OSM 추출본 경로 (GeoJSON 또는 GeoJSONSeq). 비어 있으면 경로 계산이 거절된다.
+    # **이 파일을 저장소에 커밋하지 않는다** — OSM 파생물은 ODbL 이고, KOGL 정부
+    # 데이터와 병합해 배포하면 share-alike 가 정부 데이터에까지 얹힌다.
+    road_network_path: str = ""
+
     # 상황판이 마을 단위로 말할 수 있는 기본 시군. 데모/시드의 기준점이다.
     default_region_code: str = "47750"  # 청송군 — 프론트엔드 콘솔의 기본 화면
 

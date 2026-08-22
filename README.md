@@ -122,6 +122,7 @@ const tone = res.state === "DATA" ? "active"
 | `/api/v1/incidents/{id}/contacts` | 주민 연락 명단과 결과 |
 | `/api/v1/incidents/{id}/tasks`, `/api/v1/tasks` | 현장 임무와 보고 |
 | `/api/v1/communities`, `/api/v1/shelters` | 마을·대피소 (대피소 조회는 `hazard` 필수) |
+| `/api/v1/routing` | 위험 구역을 피해 대피소로 가는 경로 (OSM, 이동수단별) |
 | `/api/v1/assistant` | 챗봇용 도구 정의·시스템 프롬프트 중계 |
 | `/api/v1/public` | 주민 화면용 요약 (인증 불필요, 개인정보 없음) |
 
@@ -135,6 +136,31 @@ const tone = res.state === "DATA" ? "active"
 - 승인되지 않은 계획으로 연락을 개시하면 **409** 를 돌려준다
 - 현장 보고에 접근 제약이 실리면 승인된 계획이 `reapproval_required` 로 바뀐다
 - 승인·연락개시·보고접수는 전부 `audit_events` 에 남고 `/timeline` 이 그대로 읽는다
+
+---
+
+## 대피 경로
+
+OSM 도로망 위에서 이동수단별로 경로를 낸다. 산불처럼 **퍼지는 재난은 시간에 따라 커지는
+위험**을 반영한다 — 각 지점을 지나는 시각의 위험으로 판단하므로, 같은 요청이라도 출발이
+늦으면 경로가 달라진다.
+
+```bash
+# 도로망을 먼저 만든다 (커밋하지 않는다 — ODbL)
+uv run python scripts/build_road_network.py \
+    --bbox 129.10,36.36,129.22,36.44 --output data/local/roads.geojson
+
+SALGIL_ROAD_NETWORK_PATH=data/local/roads.geojson uv run uvicorn app.main:app
+```
+
+도로망이 없으면 경로 계산이 **거절된다.** 도로망 없이 경로를 내면 지도 위에 그럴듯한
+직선이 그려질 뿐이다.
+
+현장 보고에 통제 구간이 실리면 그 지점이 차단으로 들어간다 — 예측은 확률이지만 현장 보고는
+사람이 가서 본 것이라 더 강하다.
+
+**여기서 나오는 경로는 제안이지 공식 안전경로가 아니다.** OSM 파생물이므로 응답의
+`attribution` 을 지우면 안 된다.
 
 ---
 

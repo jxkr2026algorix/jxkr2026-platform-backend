@@ -44,9 +44,14 @@ class GridSpec(BaseModel):
     height: int
     width: int
     cell_size_m: float | None = None
-    crs: str | None = Field(default=None, description="예: EPSG:5179")
+    crs: str | None = Field(default=None, description="예: EPSG:4326")
     bbox: list[float] | None = Field(
-        default=None, description="[minx, miny, maxx, maxy] — crs 기준"
+        default=None,
+        description=(
+            "[minx, miny, maxx, maxy] — crs 기준. **경로 계산에 쓰려면 필수다.** "
+            "없으면 백엔드가 격자 위치를 가정할 수밖에 없고, 가정이 틀리면 위험 구역이 "
+            "실제와 다른 자리에 놓인다"
+        ),
     )
 
 
