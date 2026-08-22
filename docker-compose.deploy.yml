@@ -30,6 +30,11 @@ services:
     depends_on:
       db:
         condition: service_completed_successfully
+    # .env 를 통째로 넘긴다. 기본 compose 는 environment 에 적힌 변수만 전달하는데,
+    # 그러면 .env 에 새 항목을 추가해도 컨테이너까지 가지 않고 조용히 무시된다.
+    # 실제로 챗봇 키(SALGIL_UPSTAGE_API_KEY)가 그렇게 사라졌다.
+    env_file:
+      - .env
     environment:
       # salgil-infra 스택의 Postgres. 값은 .env 에서 온다.
       SALGIL_DATABASE_URL: ${SALGIL_DATABASE_URL:?SALGIL_DATABASE_URL 이 필요합니다}
