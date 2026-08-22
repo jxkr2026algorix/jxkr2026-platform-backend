@@ -186,3 +186,72 @@ async def test_readiness_flags_triton_not_loaded(client, seeded):
     assert ok is False
     assert "Triton" in detail
     await ml.aclose()
+
+
+async def test_failed_run_survives_the_rollback(client, seeded, session):
+    """실패 기록은 별도 트랜잭션이어야 한다.
+
+    요청 세션에 넣으면 예외와 함께 롤백돼, 정확히 남겨야 할 순간에 아무것도 남지 않는다.
+    """
+    import httpx
+    from sqlalchemy import select
+
+    from app.clients.mlengine import MlEngineClient
+    from app.core.config import Settings
+    from app.db.models import PredictionRun
+
+    def handler(request):
+        return httpx.Response(503, json={"detail": "모델이 Triton 에 로드되지 않았습니다"})
+
+    settings = Settings(mlengine_mode="http", mlengine_base_url="http://ml.test", api_keys="")
+    client._transport.app.state.mlengine = MlEngineClient(
+        settings,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://ml.test"),
+    )
+
+    response = await client.post(
+        "/api/v1/predictions",
+        json={"recipe": "landslide_risk", "region_code": "47750"},
+    )
+    assert response.status_code == 502
+
+    rows = (
+        (await session.execute(select(PredictionRun).where(PredictionRun.status == "failed")))
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].recipe == "landslide_risk"
+    assert "Triton" in rows[0].error_detail
+
+
+async def test_client_error_is_also_recorded(client, seeded, session):
+    """422(우리 요청이 틀림)도 이력이다 — 무엇을 잘못 보냈는지 나중에 봐야 한다."""
+    import httpx
+    from sqlalchemy import select
+
+    from app.clients.mlengine import MlEngineClient
+    from app.core.config import Settings
+    from app.db.models import PredictionRun
+
+    def handler(request):
+        return httpx.Response(422, json={"detail": "16×16 격자를 받습니다"})
+
+    settings = Settings(mlengine_mode="http", mlengine_base_url="http://ml.test", api_keys="")
+    client._transport.app.state.mlengine = MlEngineClient(
+        settings,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://ml.test"),
+    )
+
+    response = await client.post(
+        "/api/v1/predictions",
+        json={"recipe": "landslide_risk", "region_code": "47750"},
+    )
+    assert response.status_code == 422
+
+    rows = (
+        (await session.execute(select(PredictionRun).where(PredictionRun.status == "failed")))
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1

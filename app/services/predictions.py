@@ -19,6 +19,7 @@ from app.clients.mlengine import RECIPE_FOR_HAZARD, MlEngineClient
 from app.core.errors import UpstreamError, ValidationError
 from app.db.base import utcnow
 from app.db.models import PredictionRun
+from app.db.session import get_sessionmaker
 from app.schemas.prediction import PredictionRequest, PredictionResult, Recipe
 
 
@@ -43,23 +44,15 @@ async def run(
 
     try:
         result = await client.predict(request)
-    except UpstreamError as exc:
+    except (UpstreamError, ValidationError) as exc:
         # 실패도 이력이다. 남기지 않으면 "그때 모델이 죽어 있었다"를 나중에 알 수 없다.
-        session.add(
-            PredictionRun(
-                incident_id=incident_uuid,
-                recipe=request.recipe.value,
-                region_code=request.region_code or "",
-                hazard=request.hazard,
-                horizon_minutes=request.horizon_minutes,
-                status="failed",
-                served_by=client.mode,
-                requested_at=started,
-                error_detail=exc.detail[:2000],
-                request_payload=request.model_dump(mode="json", exclude={"inputs"}),
-            )
+        await _record_failure(
+            request,
+            incident_uuid=incident_uuid,
+            started=started,
+            served_by=client.mode,
+            detail=exc.detail,
         )
-        await session.flush()
         raise
 
     session.add(
@@ -84,6 +77,39 @@ async def run(
     )
     await session.flush()
     return result
+
+
+async def _record_failure(
+    request: PredictionRequest,
+    *,
+    incident_uuid: uuid.UUID | None,
+    started: datetime,
+    served_by: str,
+    detail: str,
+) -> None:
+    """실패 기록은 **별도 트랜잭션**으로 남긴다.
+
+    요청 세션에 넣으면 예외와 함께 롤백되어 사라진다 — 정확히 남겨야 할 순간에
+    아무것도 남지 않는다. 요청 세션을 여기서 커밋할 수도 없다. 그러면 그 요청이
+    진행하다 만 다른 변경까지 같이 커밋된다.
+    """
+    factory = get_sessionmaker()
+    async with factory() as audit_session:
+        audit_session.add(
+            PredictionRun(
+                incident_id=incident_uuid,
+                recipe=request.recipe.value,
+                region_code=request.region_code or "",
+                hazard=request.hazard,
+                horizon_minutes=request.horizon_minutes,
+                status="failed",
+                served_by=served_by,
+                requested_at=started,
+                error_detail=detail[:2000],
+                request_payload=request.model_dump(mode="json", exclude={"inputs"}),
+            )
+        )
+        await audit_session.commit()
 
 
 def _is_uuid(value: str) -> bool:
