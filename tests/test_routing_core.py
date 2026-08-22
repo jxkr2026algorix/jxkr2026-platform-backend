@@ -225,3 +225,91 @@ def test_departure_delay_increases_exposure(graph):
 
 def test_straight_line_distance_sanity():
     assert haversine_m(BASE_LAT, BASE_LON, BASE_LAT + STEP, BASE_LON) == pytest.approx(222, abs=5)
+
+
+class TestGraphCache:
+    """그래프 구축은 경북 전역이면 수단당 40초가 넘는다. 원본이 그대로면 다시
+    만들 이유가 없으므로 직렬화해 두고 꺼내 쓴다."""
+
+    def test_second_load_comes_from_cache(self, tmp_path):
+        from app.routing.graph import load_road_graph
+        from app.routing.profiles import TransportMode, profile_for
+
+        path = tmp_path / "roads.geojson"
+        path.write_text(json.dumps(_grid_geojson()), encoding="utf-8")
+        profile = profile_for(TransportMode.FOOT)
+
+        first = load_road_graph(path, profile)
+        caches = list((tmp_path / ".graph-cache").glob("*.pickle"))
+        assert len(caches) == 1, "구축 후 캐시가 만들어져야 한다"
+
+        second = load_road_graph(path, profile)
+        assert len(second) == len(first)
+        assert second.edge_count == first.edge_count
+        assert second.way_count == first.way_count
+
+    def test_nearest_node_still_works_after_a_round_trip(self, tmp_path):
+        """공간 인덱스는 repr 에서 빠지는 비공개 필드다. 직렬화에서 누락되면
+        캐시로 읽은 그래프는 가장 가까운 노드를 찾지 못한다."""
+        from app.routing.graph import load_road_graph
+        from app.routing.profiles import TransportMode, profile_for
+
+        path = tmp_path / "roads.geojson"
+        path.write_text(json.dumps(_grid_geojson()), encoding="utf-8")
+        profile = profile_for(TransportMode.FOOT)
+
+        built = load_road_graph(path, profile)
+        cached = load_road_graph(path, profile)
+
+        assert cached.nearest_node(BASE_LAT, BASE_LON) == built.nearest_node(BASE_LAT, BASE_LON)
+        assert cached.nearest_node(BASE_LAT, BASE_LON) is not None
+
+    def test_changed_source_is_not_served_from_the_old_cache(self, tmp_path):
+        """같은 크기로 덮어써도 새로 만들어야 한다. 옛 캐시를 쓰면 옛 지도로
+        계산한 대피 경로가 나간다."""
+        from app.routing.graph import load_road_graph
+        from app.routing.profiles import TransportMode, profile_for
+
+        path = tmp_path / "roads.geojson"
+        path.write_text(json.dumps(_grid_geojson()), encoding="utf-8")
+        profile = profile_for(TransportMode.FOOT)
+
+        first = load_road_graph(path, profile)
+
+        smaller = _grid_geojson()
+        smaller["features"] = smaller["features"][:2]
+        path.write_text(json.dumps(smaller), encoding="utf-8")
+
+        second = load_road_graph(path, profile)
+        assert second.way_count != first.way_count
+        assert len(list((tmp_path / ".graph-cache").glob("*.pickle"))) == 2
+
+    def test_a_corrupt_cache_falls_back_to_building(self, tmp_path):
+        from app.routing.graph import load_road_graph
+        from app.routing.profiles import TransportMode, profile_for
+
+        path = tmp_path / "roads.geojson"
+        path.write_text(json.dumps(_grid_geojson()), encoding="utf-8")
+        profile = profile_for(TransportMode.FOOT)
+
+        built = load_road_graph(path, profile)
+        cache = next((tmp_path / ".graph-cache").glob("*.pickle"))
+        cache.write_bytes(b"not a pickle")
+
+        recovered = load_road_graph(path, profile)
+        assert len(recovered) == len(built)
+
+    def test_an_unwritable_cache_directory_does_not_break_loading(self, tmp_path, monkeypatch):
+        """읽기 전용 볼륨에서도 경로 계산은 되어야 한다. 캐시는 최적화지 조건이 아니다."""
+        from app.routing import graph as graph_module
+        from app.routing.profiles import TransportMode, profile_for
+
+        path = tmp_path / "roads.geojson"
+        path.write_text(json.dumps(_grid_geojson()), encoding="utf-8")
+
+        def refuse(*args, **kwargs):
+            raise OSError("read-only file system")
+
+        monkeypatch.setattr(graph_module.Path, "mkdir", refuse)
+        built = graph_module.load_road_graph(path, profile_for(TransportMode.FOOT))
+        assert len(built) > 0
