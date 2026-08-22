@@ -17,7 +17,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.schemas.hazard import Hazard
 from app.schemas.incident import IncidentCreate
 from app.services import incidents
-from app.services.events import Event, broker
 
 logger = logging.getLogger(__name__)
 
@@ -63,9 +62,12 @@ def region_center(code: str) -> tuple[float, float]:
 
 
 def resolve_region(code: str, name: str) -> tuple[str, str] | None:
-    """코드나 이름 중 맞는 쪽으로 시군을 찾는다. 둘 다 아니면 None."""
-    if code in GYEONGBUK_REGIONS:
-        return code, REGION_NAMES[code]
+    """시군을 찾는다. **이름이 코드를 이긴다.** 둘 다 아니면 None.
+
+    모델은 이름은 사용자가 쓴 말을 그대로 되돌려 주지만 다섯 자리 코드는 외우지 못한다.
+    실제로 `region_name="봉화군"` 과 `region_code="47250"`(상주시) 을 함께 보냈다.
+    코드를 먼저 믿으면 봉화 훈련이 상주에서 열린다.
+    """
     for candidate in (name.strip(), code.strip()):
         if candidate in _BY_NAME:
             return _BY_NAME[candidate], candidate
@@ -73,6 +75,8 @@ def resolve_region(code: str, name: str) -> tuple[str, str] | None:
         for known, known_code in _BY_NAME.items():
             if candidate and known.startswith(candidate):
                 return known_code, known
+    if code in GYEONGBUK_REGIONS:
+        return code, REGION_NAMES[code]
     return None
 
 
@@ -119,9 +123,19 @@ async def start_drill(
 ) -> dict[str, Any]:
     """훈련 상황을 개시하고 스트림에 알린다."""
     if hazard not in DRILL_HAZARDS:
+        # 무엇이 잘못됐는지 정확히 말한다. "지원하지 않는 재난"만 돌려주면 모델은
+        # 지역까지 다시 고쳐 보내고, 그 재시도에서 엉뚱한 시군이 나온다.
+        missing = (
+            "재난 종류(hazard)가 빠졌습니다"
+            if not hazard
+            else f"'{hazard}' 는 훈련 대상이 아닙니다"
+        )
         return {
             "error": "unsupported_hazard",
-            "detail": f"훈련으로 개시할 수 있는 재난: {sorted(DRILL_HAZARDS)}",
+            "detail": (
+                f"{missing}. 가능한 값: {sorted(DRILL_HAZARDS)}. "
+                "지역은 그대로 두고 hazard 만 채워 다시 부르세요."
+            ),
         }
 
     resolved = resolve_region(region_code, region_name)
@@ -153,32 +167,15 @@ async def start_drill(
         region_name=region_name,
     )
 
+    # 스트림 알림은 incidents.create 가 낸다 — 콘솔 발령과 같은 자리다. 훈련 표시는
+    # opening_evidence 를 통해 그 이벤트에 실린다.
+    #
     # 여기서 직접 커밋한다. 챗봇 응답은 SSE 스트림이고, 라우트의 트랜잭션 경계는
     # 핸들러가 StreamingResponse 를 **반환한 직후** — 이 코드가 돌기도 전에 — 끝난다.
     # 커밋하지 않으면 훈련은 스트림에만 존재하고 DB 에는 남지 않아, 화면에 경보는 뜨는데
     # 상황 목록은 비어 있고 나중에 접속한 사람은 아무것도 못 본다.
     await session.commit()
 
-    # 훈련 표시는 스트림 이벤트에도 실린다. 화면이 상황 목록만 보고 판단하지 않도록.
-    # 커밋 뒤에 알린다 — 저장에 실패한 상황을 알리면 화면과 DB 가 어긋난다.
-    broker.publish(
-        Event(
-            kind="incident.declared",
-            data={
-                "incident_id": str(incident.id),
-                "code": incident.code,
-                "title": incident.title,
-                "hazard": hazard,
-                "region_code": region_code,
-                "region_name": region_name,
-                "drill": True,
-                "mode": "training",
-                "lat": lat,
-                "lon": lon,
-            },
-            incident_id=str(incident.id),
-        )
-    )
     logger.info("assistant started a drill: %s %s", incident.code, hazard)
     return {
         "ok": True,
@@ -212,24 +209,21 @@ def tool_spec() -> dict[str, Any]:
                         "enum": sorted(DRILL_HAZARDS),
                         "description": "훈련할 재난 종류",
                     },
-                    "region_code": {
-                        "type": "string",
-                        "enum": sorted(GYEONGBUK_REGIONS),
-                        "description": (
-                            "경북 시군 행정표준코드 5자리. 청송군 47750, 안동시 47170, "
-                            "포항시 47110, 영덕군 47770, 울진군 47930."
-                        ),
-                    },
+                    # 이름만 필수다. 코드를 필수로 두면 모델이 아무 코드나 채워 넣고,
+                    # 그러면 봉화 훈련이 상주에서 열린다 — 실제로 그랬다.
                     "region_name": {
                         "type": "string",
                         "enum": sorted(REGION_NAMES.values()),
-                        "description": "시군 이름 (예: 청송군)",
+                        "description": (
+                            "시군 이름. 사용자가 말한 지역을 그대로 쓴다 — "
+                            "'봉화'라고 하면 '봉화군'."
+                        ),
                     },
                     "lat": {"type": "number", "description": "발생 지점 위도 (선택)"},
                     "lon": {"type": "number", "description": "발생 지점 경도 (선택)"},
                     "note": {"type": "string", "description": "훈련 안내 문구 (선택)"},
                 },
-                "required": ["hazard", "region_code", "region_name"],
+                "required": ["hazard", "region_name"],
             },
         },
     }
@@ -246,8 +240,9 @@ SYSTEM_ADDENDUM = """
 
 - 운영자가 "훈련으로 발생시켜줘", "훈련 상황 걸어줘" 처럼 요청하면 **설명하는 글을 쓰지
   말고 도구를 부르세요.** 시나리오 문서를 대신 써 주는 것은 요청을 수행한 것이 아닙니다.
-- 지역은 행정표준코드 5자리로 넘깁니다. 사용자가 "청송"처럼 줄여 말하면 청송군(47750)
-  으로 해석하세요. 경북 밖이면 개시하지 말고 그렇게 답합니다.
+- 지역은 `region_name` 에 **시군 이름**으로 넘깁니다. 사용자가 "청송"처럼 줄여 말하면
+  "청송군"으로 씁니다. 코드는 넣지 마세요 — 이름만 정확하면 됩니다. 경북 밖이면 개시하지
+  말고 그렇게 답합니다.
 - **실제 경보는 개시할 수 없습니다.** 진짜 상황을 알리라고 하면 훈련만 가능하다고 답하고,
   실제 발령은 콘솔에서 사람이 해야 한다고 안내하세요.
 - 개시한 뒤에는 상황 코드를 알려주고, 화면에 훈련 표시가 붙는다는 점을 덧붙이세요.

@@ -91,13 +91,23 @@ async def _run_tool(
                 {"error": "no_session", "detail": "훈련을 개시할 수 없습니다"},
                 ensure_ascii=False,
             )
+        # 모델이 스키마대로 부르지 않는다. `{"region": "영양군"}` 만 보낸 적이 있고,
+        # 그때는 hazard 도 빠져 있었다. 이름이 다른 같은 뜻의 필드는 받아 준다 —
+        # 거부하고 다시 물으면 왕복이 늘고, 그 사이 훈련은 시작되지 않는다.
+        region_name = str(
+            params.get("region_name")
+            or params.get("region")
+            or params.get("district")
+            or params.get("sigungu")
+            or ""
+        )
         try:
             return json.dumps(
                 await drills.start_drill(
                     session,
-                    hazard=str(params.get("hazard", "")),
-                    region_code=str(params.get("region_code", "")),
-                    region_name=str(params.get("region_name", "")),
+                    hazard=str(params.get("hazard") or ""),
+                    region_code=str(params.get("region_code") or ""),
+                    region_name=region_name,
                     lat=params.get("lat"),
                     lon=params.get("lon"),
                     note=params.get("note"),

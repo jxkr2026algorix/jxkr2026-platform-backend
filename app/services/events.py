@@ -16,10 +16,13 @@ import asyncio
 import contextlib
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
+
+from sqlalchemy import event as sa_event
+from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
@@ -96,3 +99,45 @@ class EventBroker:
 
 
 broker = EventBroker()
+
+
+# ── 커밋된 뒤에 알리기 ────────────────────────────────────────────────────
+#
+# 발표와 저장이 어긋나면 두 가지 중 하나가 난다. 커밋 전에 알리면 롤백된 상황이 주민
+# 화면에 뜨고, 알리지 않고 커밋만 하면 저장은 됐는데 아무도 모른다. 둘 다 겪었다.
+#
+# 그래서 이벤트를 세션에 얹어 두고 커밋이 끝난 뒤에 내보낸다. 롤백되면 버린다.
+# 스트리밍 응답 안에서 도는 코드도 이 규칙을 그대로 따른다 — 라우트의 트랜잭션 경계가
+# 언제 끝나는지 각 호출자가 알 필요가 없어진다.
+
+_PENDING_KEY = "salgil_pending_events"
+
+
+def publish_after_commit(session: Any, event: Event) -> None:
+    """이 세션의 커밋이 성공하면 이벤트를 내보낸다."""
+    info = getattr(session, "sync_session", session).info
+    info.setdefault(_PENDING_KEY, []).append(event)
+
+
+@sa_event.listens_for(Session, "after_commit")
+def _publish_pending(session: Session) -> None:
+    for event in session.info.pop(_PENDING_KEY, []):
+        broker.publish(event)
+        for hook in _after_publish:
+            try:
+                hook(event)
+            except Exception:  # 알림 실패가 커밋을 되돌리게 두지 않는다
+                logger.exception("post-commit hook failed for %s", event.kind)
+
+
+@sa_event.listens_for(Session, "after_rollback")
+def _drop_pending(session: Session) -> None:
+    session.info.pop(_PENDING_KEY, None)
+
+
+# 커밋된 이벤트를 보고 싶은 쪽이 등록한다. 지금은 Web Push 하나다.
+_after_publish: list[Callable[[Event], None]] = []
+
+
+def on_published(hook: Callable[[Event], None]) -> None:
+    _after_publish.append(hook)

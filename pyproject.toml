@@ -17,6 +17,7 @@ dependencies = [
     "httpx>=0.28",
     "structlog>=24.4",
     "python-multipart>=0.0.20",
+    "pywebpush>=2.4.0",
 ]
 
 [project.optional-dependencies]

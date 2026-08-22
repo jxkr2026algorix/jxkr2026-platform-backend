@@ -41,6 +41,7 @@ from app.core.errors import install_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.db.session import dispose_engine
 from app.schemas.meta import ComponentHealth, ServiceHealth
+from app.services import push
 
 settings = get_settings()
 configure_logging(settings)
@@ -74,6 +75,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.gbsafe = GbSafeClient(settings)
     app.state.mlengine = MlEngineClient(settings)
     app.state.upstage = UpstageClient(settings)
+    # 발령된 상황을 주민 잠금화면까지 보낸다. 키가 없으면 조용히 건너뛴다.
+    push.register(settings)
     log.info(
         "startup",
         env=settings.env,
@@ -82,6 +85,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         mlengine_mode=settings.mlengine_mode,
         mlengine=settings.mlengine_base_url if settings.mlengine_mode == "http" else None,
         auth_enabled=settings.auth_enabled,
+        push=push.configured(settings),
     )
     problems = settings.unsafe_defaults()
     if problems:

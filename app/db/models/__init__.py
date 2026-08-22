@@ -9,6 +9,7 @@ from app.db.models.contact import ContactAttempt
 from app.db.models.incident import AuditEvent, Incident
 from app.db.models.plan import EvacuationPlan, PlanItem
 from app.db.models.prediction import PredictionRun
+from app.db.models.push import PushSubscription
 from app.db.models.task import FieldReport, FieldTask
 
 __all__ = [
@@ -21,5 +22,6 @@ __all__ = [
     "Incident",
     "PlanItem",
     "PredictionRun",
+    "PushSubscription",
     "Shelter",
 ]

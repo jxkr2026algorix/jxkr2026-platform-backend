@@ -73,9 +73,32 @@ def _routes() -> int:
     return 0
 
 
+def _push_keys() -> int:
+    """VAPID 한 쌍을 만들어 출력한다. 저장하지 않는다 — 어디에 둘지는 사람이 정한다."""
+    import base64
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    private = ec.generate_private_key(ec.SECP256R1())
+    raw_public = private.public_key().public_bytes(
+        serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint
+    )
+    raw_private = private.private_numbers().private_value.to_bytes(32, "big")
+
+    def b64(raw: bytes) -> str:
+        return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+    print("# .env 에 넣으세요. 비밀키는 저장소에 커밋하지 마세요 —")
+    print("# 그것을 가진 사람은 이 도메인 이름으로 주민 잠금화면에 무엇이든 띄웁니다.")
+    print(f"SALGIL_VAPID_PUBLIC_KEY={b64(raw_public)}")
+    print(f"SALGIL_VAPID_PRIVATE_KEY={b64(raw_private)}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="salgil", description="SALGIL 플랫폼 백엔드 CLI")
-    parser.add_argument("command", choices=["seed", "check", "routes"])
+    parser.add_argument("command", choices=["seed", "check", "routes", "push-keys"])
     args = parser.parse_args(argv)
 
     configure_logging(get_settings())
@@ -84,6 +107,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_seed())
     if args.command == "check":
         return asyncio.run(_check())
+    if args.command == "push-keys":
+        return _push_keys()
     return _routes()
 
 

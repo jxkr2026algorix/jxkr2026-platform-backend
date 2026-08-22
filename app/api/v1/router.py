@@ -11,6 +11,7 @@ from app.api.v1 import (
     plans,
     predictions,
     public,
+    push,
     routing,
     situation,
     stream,
@@ -31,3 +32,4 @@ api_router.include_router(routing.router)
 api_router.include_router(stream.router)
 api_router.include_router(assistant.router)
 api_router.include_router(public.router)
+api_router.include_router(push.router)

@@ -41,6 +41,16 @@ class Settings(BaseSettings):
     upstage_timeout_s: float = 90.0
     # 한 질문에 허용할 도구 호출 왕복. 모델이 같은 도구를 무한히 부르는 것을 막는다.
     upstage_max_tool_rounds: int = 4
+    # ── Web Push (주민 알림) ──────────────────────────────────────────────
+    # 키가 없으면 푸시만 꺼진다. `salgil push-keys` 로 한 쌍을 만들어 넣는다.
+    # 공개키는 브라우저에 그대로 나가고, 비밀키는 절대 나가면 안 된다 — 그것을 가진
+    # 사람은 이 도메인 이름으로 주민 잠금화면에 무엇이든 띄울 수 있다.
+    vapid_public_key: str = ""
+    vapid_private_key: str = ""
+    # 푸시 서비스가 문제를 알릴 연락처. mailto: 또는 https: 여야 한다.
+    vapid_subject: str = "mailto:ops@salgil.gyeongbuk.kr"
+    push_timeout_s: float = 10.0
+
     db_echo: bool = False
     db_pool_size: int = 10
     db_max_overflow: int = 20

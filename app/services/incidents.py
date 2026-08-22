@@ -12,6 +12,7 @@ from app.db.base import utcnow
 from app.db.models import AuditEvent, Incident
 from app.schemas.incident import IncidentCreate, IncidentUpdate
 from app.services import audit
+from app.services.events import Event, publish_after_commit
 
 
 async def next_incident_code(session: AsyncSession) -> str:
@@ -60,6 +61,32 @@ async def create(
         incident_id=incident.id,
         summary=f"{region_name} {payload.hazard.value} 상황 개시 (대응 {payload.level}단계)",
         payload={"code": code, "level": payload.level},
+    )
+
+    # 스트림 알림은 여기서 낸다 — 콘솔이 발령한 상황과 챗봇이 개시한 훈련이 만나는
+    # 유일한 지점이다. 훈련 쪽에만 있었을 때는 운영자가 직접 발령한 진짜 상황이
+    # 주민 화면에 실시간으로 닿지 않고 폴링이 따라잡기를 기다려야 했다.
+    evidence = payload.opening_evidence or {}
+    lat, lon = evidence.get("lat"), evidence.get("lon")
+    publish_after_commit(
+        session,
+        Event(
+            kind="incident.declared",
+            data={
+                "incident_id": str(incident.id),
+                "code": code,
+                "title": incident.title,
+                "hazard": incident.hazard,
+                "region_code": incident.region_code,
+                "region_name": region_name,
+                # 훈련 표시는 화면까지 그대로 간다. 훈련이 실제처럼 보이면 두 번째
+                # 훈련부터 아무도 움직이지 않고, 진짜 경보도 같이 무시된다.
+                "drill": bool(evidence.get("drill")),
+                "mode": evidence.get("mode", "live"),
+                **({"lat": lat, "lon": lon} if lat is not None and lon is not None else {}),
+            },
+            incident_id=str(incident.id),
+        ),
     )
     return incident
 
