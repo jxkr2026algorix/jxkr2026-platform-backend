@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from itertools import pairwise
 
 import pytest
 
@@ -227,89 +228,88 @@ def test_straight_line_distance_sanity():
     assert haversine_m(BASE_LAT, BASE_LON, BASE_LAT + STEP, BASE_LON) == pytest.approx(222, abs=5)
 
 
-class TestGraphCache:
-    """그래프 구축은 경북 전역이면 수단당 40초가 넘는다. 원본이 그대로면 다시
-    만들 이유가 없으므로 직렬화해 두고 꺼내 쓴다."""
+class TestContraction:
+    """형상점을 걷어내 노드 수를 줄인다. 줄이는 것 자체는 목적이 아니고, 경로
+    결과가 같아야 의미가 있다."""
 
-    def test_second_load_comes_from_cache(self, tmp_path):
-        from app.routing.graph import load_road_graph
-        from app.routing.profiles import TransportMode, profile_for
+    @staticmethod
+    def _chain_geojson(points: int, step_deg: float) -> dict:
+        """교차로 없이 점만 이어진 긴 길 하나."""
+        coords = [[BASE_LON + i * step_deg, BASE_LAT] for i in range(points)]
+        return {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "id": "way/1",
+                    "properties": {"highway": "residential"},
+                    "geometry": {"type": "LineString", "coordinates": coords},
+                }
+            ],
+        }
 
+    def _load(self, tmp_path, payload):
         path = tmp_path / "roads.geojson"
-        path.write_text(json.dumps(_grid_geojson()), encoding="utf-8")
-        profile = profile_for(TransportMode.FOOT)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return load_road_graph(path, profile_for(TransportMode.FOOT))
 
-        first = load_road_graph(path, profile)
-        caches = list((tmp_path / ".graph-cache").glob("*.pickle"))
-        assert len(caches) == 1, "구축 후 캐시가 만들어져야 한다"
+    def test_dense_shape_points_collapse(self, tmp_path):
+        """10m 간격 점 200개짜리 직선은 교차로가 없다. 전부 남길 이유가 없다."""
+        graph = self._load(tmp_path, self._chain_geojson(200, 0.0001))
+        assert len(graph) < 30, f"형상점이 그대로 남았습니다 ({len(graph)}개)"
 
-        second = load_road_graph(path, profile)
-        assert len(second) == len(first)
-        assert second.edge_count == first.edge_count
-        assert second.way_count == first.way_count
+    def test_total_length_is_preserved(self, tmp_path):
+        """합쳐진 엣지의 길이 합은 원래 길과 같아야 한다. 여기서 어긋나면
+        대피 경로의 거리와 소요시간이 전부 틀어진다."""
+        payload = self._chain_geojson(200, 0.0001)
+        graph = self._load(tmp_path, payload)
 
-    def test_nearest_node_still_works_after_a_round_trip(self, tmp_path):
-        """공간 인덱스는 repr 에서 빠지는 비공개 필드다. 직렬화에서 누락되면
-        캐시로 읽은 그래프는 가장 가까운 노드를 찾지 못한다."""
-        from app.routing.graph import load_road_graph
-        from app.routing.profiles import TransportMode, profile_for
+        coords = payload["features"][0]["geometry"]["coordinates"]
+        expected = sum(
+            haversine_m(a[1], a[0], b[1], b[0]) for a, b in pairwise(coords)
+        )
+        total = sum(e.length_m for edges in graph.nodes.values() for e in edges) / 2
+        assert total == pytest.approx(expected, rel=0.001)
 
-        path = tmp_path / "roads.geojson"
-        path.write_text(json.dumps(_grid_geojson()), encoding="utf-8")
-        profile = profile_for(TransportMode.FOOT)
+    def test_snapping_stays_close(self, tmp_path):
+        """축약해도 길 위의 점은 가까운 노드를 찾아야 한다. 교차로만 남기면
+        시골 도로에서 수 km 떨어진 곳에서 출발하는 경로가 나온다."""
+        graph = self._load(tmp_path, self._chain_geojson(200, 0.0001))
 
-        built = load_road_graph(path, profile)
-        cached = load_road_graph(path, profile)
+        coords = self._chain_geojson(200, 0.0001)["features"][0]["geometry"]["coordinates"]
+        worst = 0.0
+        for lon, lat in coords:
+            node = graph.nearest_node(lat, lon, max_distance_m=2000.0)
+            assert node is not None, "길 위의 점인데 노드를 못 찾았습니다"
+            worst = max(worst, haversine_m(lat, lon, node[0], node[1]))
+        assert worst < 100.0, f"스냅 오차가 {worst:.0f}m 입니다 — 간격의 절반을 넘습니다"
 
-        assert cached.nearest_node(BASE_LAT, BASE_LON) == built.nearest_node(BASE_LAT, BASE_LON)
-        assert cached.nearest_node(BASE_LAT, BASE_LON) is not None
+    def test_junctions_are_never_removed(self, tmp_path):
+        """교차로는 경로 선택지 그 자체다. 지우면 갈 수 있는 길이 사라진다."""
+        graph = self._load(tmp_path, _grid_geojson())
+        degrees = [len(edges) for edges in graph.nodes.values()]
+        assert any(d > 2 for d in degrees), "격자인데 분기 노드가 없습니다"
 
-    def test_changed_source_is_not_served_from_the_old_cache(self, tmp_path):
-        """같은 크기로 덮어써도 새로 만들어야 한다. 옛 캐시를 쓰면 옛 지도로
-        계산한 대피 경로가 나간다."""
-        from app.routing.graph import load_road_graph
-        from app.routing.profiles import TransportMode, profile_for
-
-        path = tmp_path / "roads.geojson"
-        path.write_text(json.dumps(_grid_geojson()), encoding="utf-8")
-        profile = profile_for(TransportMode.FOOT)
-
-        first = load_road_graph(path, profile)
-
-        smaller = _grid_geojson()
-        smaller["features"] = smaller["features"][:2]
-        path.write_text(json.dumps(smaller), encoding="utf-8")
-
-        second = load_road_graph(path, profile)
-        assert second.way_count != first.way_count
-        assert len(list((tmp_path / ".graph-cache").glob("*.pickle"))) == 2
-
-    def test_a_corrupt_cache_falls_back_to_building(self, tmp_path):
-        from app.routing.graph import load_road_graph
-        from app.routing.profiles import TransportMode, profile_for
-
-        path = tmp_path / "roads.geojson"
-        path.write_text(json.dumps(_grid_geojson()), encoding="utf-8")
-        profile = profile_for(TransportMode.FOOT)
-
-        built = load_road_graph(path, profile)
-        cache = next((tmp_path / ".graph-cache").glob("*.pickle"))
-        cache.write_bytes(b"not a pickle")
-
-        recovered = load_road_graph(path, profile)
-        assert len(recovered) == len(built)
-
-    def test_an_unwritable_cache_directory_does_not_break_loading(self, tmp_path, monkeypatch):
-        """읽기 전용 볼륨에서도 경로 계산은 되어야 한다. 캐시는 최적화지 조건이 아니다."""
-        from app.routing import graph as graph_module
-        from app.routing.profiles import TransportMode, profile_for
-
-        path = tmp_path / "roads.geojson"
-        path.write_text(json.dumps(_grid_geojson()), encoding="utf-8")
-
-        def refuse(*args, **kwargs):
-            raise OSError("read-only file system")
-
-        monkeypatch.setattr(graph_module.Path, "mkdir", refuse)
-        built = graph_module.load_road_graph(path, profile_for(TransportMode.FOOT))
-        assert len(built) > 0
+    def test_a_ring_road_survives(self, tmp_path):
+        """교차로가 하나도 없는 고리는 시작점이 없다. 처리하지 않으면 통째로 사라진다."""
+        ring = [
+            [BASE_LON, BASE_LAT],
+            [BASE_LON + 0.01, BASE_LAT],
+            [BASE_LON + 0.01, BASE_LAT + 0.01],
+            [BASE_LON, BASE_LAT + 0.01],
+            [BASE_LON, BASE_LAT],
+        ]
+        payload = {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "id": "way/ring",
+                    "properties": {"highway": "residential"},
+                    "geometry": {"type": "LineString", "coordinates": ring},
+                }
+            ],
+        }
+        graph = self._load(tmp_path, payload)
+        assert len(graph) > 0, "고리가 통째로 사라졌습니다"
+        assert graph.nearest_node(BASE_LAT, BASE_LON, max_distance_m=200.0) is not None

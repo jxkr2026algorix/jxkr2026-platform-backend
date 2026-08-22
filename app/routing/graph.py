@@ -12,12 +12,8 @@ ODbL 이 된다. 경로는 `SALGIL_ROAD_NETWORK_PATH` 로 실행 시점에 주�
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
-import os
-import pickle
-import tempfile
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,13 +25,20 @@ log = get_logger(__name__)
 
 EARTH_RADIUS_M = 6_371_008.8
 
-# 직렬화된 그래프의 형식 번호. RoadGraph 나 Edge 의 모양을 바꾸면 반드시 올린다.
-# 안 올리면 옛 캐시가 새 코드로 읽혀 필드가 어긋난 채 동작한다.
-_CACHE_VERSION = 1
-
 # 좌표를 이 자리수로 반올림해 노드를 합친다. 7자리는 약 1cm 라 서로 다른 교차로가
 # 합쳐지지 않고, 같은 교차로를 공유하는 way 들은 같은 노드가 된다.
 _NODE_PRECISION = 7
+
+# 형상점을 지우고 남기는 최소 간격. OSM 은 곡선을 10~20m 간격 점으로 표현하는데,
+# 그 점들은 교차로가 아니라서 경로 탐색에 아무 정보를 주지 않으면서 노드 수만
+# 늘린다. 경북 전역이면 그 때문에 노드가 357만 개가 되고, 파이썬 객체 1500만 개를
+# 만드느라 그래프 하나에 50초가 걸린다.
+#
+# 다만 전부 지우면 안 된다. 출발지는 가장 가까운 노드에 붙는데, 남은 노드가 교차로
+# 뿐이면 시골 도로에서 수 km 떨어진 곳에서 출발하는 경로가 나온다. 그건 경로가
+# 아니라 그럴듯한 거짓말이다. 그래서 간격을 두고 남겨 스냅 오차를 이 값의 절반으로
+# 묶는다.
+_MIN_NODE_SPACING_M = 150.0
 
 
 def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -141,6 +144,84 @@ class RoadGraph:
         return best
 
 
+def _contract(graph: RoadGraph, spacing_m: float = _MIN_NODE_SPACING_M) -> RoadGraph:
+    """형상점을 걷어내고 교차로와 일정 간격의 점만 남긴다.
+
+    degree 가 2 인 노드는 지나가는 길목일 뿐이라 경로 선택지를 만들지 않는다.
+    이어진 두 엣지를 길이를 더한 하나로 합치면 탐색 결과는 그대로면서 노드가
+    한 자리수 줄어든다.
+    """
+    junctions = {node for node, edges in graph.nodes.items() if len(edges) != 2}
+
+    # 교차로가 하나도 없는 고리(로터리, 순환도로)는 시작점이 없다. 임의의 한 점을
+    # 교차로로 삼아야 그 고리가 통째로 사라지지 않는다.
+    seen_in_chain: set[NodeId] = set()
+    for node in graph.nodes:
+        if node in junctions or node in seen_in_chain:
+            continue
+        ring: list[NodeId] = []
+        current, previous = node, None
+        while current not in junctions and current not in ring:
+            ring.append(current)
+            nxt = [e.target for e in graph.nodes[current] if e.target != previous]
+            if not nxt:
+                break
+            previous, current = current, nxt[0]
+        if current == node:  # 한 바퀴 돌아 제자리 — 고리다
+            junctions.add(node)
+        seen_in_chain.update(ring)
+
+    contracted = RoadGraph(
+        source=graph.source, way_count=graph.way_count, attribution=graph.attribution
+    )
+    walked: set[tuple[NodeId, NodeId]] = set()
+
+    for start in junctions:
+        for first in graph.nodes[start]:
+            if (start, first.target) in walked:
+                continue
+            anchor = start
+            previous, current = start, first.target
+            length = first.length_m
+            # 양방향 모두 표시한다. 한쪽만 표시하면 반대편 교차로에서 같은 체인을
+            # 다시 걸어 엣지가 두 벌 생긴다.
+            walked.add((start, first.target))
+            walked.add((first.target, start))
+
+            while True:
+                edges = graph.nodes[current]
+                at_junction = current in junctions
+                # 간격을 넘겼으면 여기서 한 번 끊어 노드를 남긴다.
+                if at_junction or length >= spacing_m:
+                    contracted.add_segment(
+                        anchor, current, length_m=length, way_id=first.way_id, tags=first.tags
+                    )
+                    if at_junction:
+                        break
+                    anchor, length = current, 0.0
+
+                nxt = next((e for e in edges if e.target != previous), None)
+                if nxt is None:  # 막다른 길
+                    if current != anchor:
+                        contracted.add_segment(
+                            anchor, current, length_m=length, way_id=first.way_id, tags=first.tags
+                        )
+                    break
+                walked.add((current, nxt.target))
+                walked.add((nxt.target, current))
+                previous, current = current, nxt.target
+                length += nxt.length_m
+
+    log.info(
+        "road_graph_contracted",
+        nodes_before=len(graph),
+        nodes_after=len(contracted),
+        edges_after=contracted.edge_count,
+        spacing_m=spacing_m,
+    )
+    return contracted
+
+
 def _node_id(lon: float, lat: float) -> NodeId:
     return (round(lat, _NODE_PRECISION), round(lon, _NODE_PRECISION))
 
@@ -163,60 +244,6 @@ def _iter_features(path: Path) -> Iterator[dict]:
             continue
 
 
-def _source_fingerprint(source: Path) -> str:
-    """도로망 파일 내용의 해시.
-
-    크기와 수정시각으로도 대개 맞지만, 같은 크기로 덮어써지는 경우를 놓친다.
-    그때 나오는 것은 옛 지도로 계산한 대피 경로다. 160MB 를 읽는 데 1초가 채
-    안 걸리고 그래프를 다시 만드는 데는 40초가 걸리므로, 확실한 쪽을 택한다.
-    """
-    digest = hashlib.blake2b(digest_size=16)
-    with source.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _cache_path(source: Path, profile: ModeProfile, fingerprint: str) -> Path:
-    name = f"{fingerprint}-{profile.mode.value}-v{_CACHE_VERSION}.pickle"
-    return source.parent / ".graph-cache" / name
-
-
-def _read_cache(cache: Path, profile: ModeProfile) -> RoadGraph | None:
-    if not cache.is_file():
-        return None
-    try:
-        with cache.open("rb") as handle:
-            graph = pickle.load(handle)
-    except Exception as exc:
-        # 캐시가 깨졌다고 경로 계산을 못 하게 둘 이유는 없다. 다시 만들면 된다.
-        log.warning("road_graph_cache_unreadable", path=str(cache), error=str(exc))
-        return None
-    if not isinstance(graph, RoadGraph):
-        log.warning("road_graph_cache_wrong_type", path=str(cache))
-        return None
-    log.info("road_graph_cache_hit", mode=profile.mode.value, nodes=len(graph), path=str(cache))
-    return graph
-
-
-def _write_cache(cache: Path, graph: RoadGraph) -> None:
-    """같은 디렉터리에 임시 파일로 쓴 뒤 옮긴다.
-
-    쓰는 도중에 죽으면 반쪽짜리 파일이 남고, 그것은 다음 기동에서 캐시로 읽힌다.
-    rename 은 원자적이라 완성된 파일만 그 이름을 갖는다.
-    """
-    try:
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(dir=cache.parent, delete=False) as tmp:
-            pickle.dump(graph, tmp, protocol=pickle.HIGHEST_PROTOCOL)
-            temporary = Path(tmp.name)
-        os.replace(temporary, cache)
-        log.info("road_graph_cached", path=str(cache), bytes=cache.stat().st_size)
-    except OSError as exc:
-        # 볼륨이 읽기 전용이면 캐시를 못 쓴다. 매번 다시 만들 뿐 동작에는 지장이 없다.
-        log.warning("road_graph_cache_unwritable", path=str(cache), error=str(exc))
-
-
 def load_road_graph(path: str | Path, profile: ModeProfile) -> RoadGraph:
     """교통수단 하나에 맞춰 그래프를 만든다.
 
@@ -226,14 +253,6 @@ def load_road_graph(path: str | Path, profile: ModeProfile) -> RoadGraph:
     source = Path(path)
     if not source.is_file():
         raise FileNotFoundError(f"도로망 파일이 없습니다: {source}")
-
-    # 그래프 구축은 수단마다 수십 초가 걸리고, 원본이 그대로면 결과도 그대로다.
-    # 만들어 둔 것이 있으면 그것을 쓴다.
-    fingerprint = _source_fingerprint(source)
-    cache = _cache_path(source, profile, fingerprint)
-    cached = _read_cache(cache, profile)
-    if cached is not None:
-        return cached
 
     graph = RoadGraph(source=str(source))
     skipped: dict[str, int] = {}
@@ -278,5 +297,4 @@ def load_road_graph(path: str | Path, profile: ModeProfile) -> RoadGraph:
         ways=graph.way_count,
         skipped=dict(sorted(skipped.items(), key=lambda kv: -kv[1])[:5]),
     )
-    _write_cache(cache, graph)
-    return graph
+    return _contract(graph)
