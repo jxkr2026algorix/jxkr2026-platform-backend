@@ -11,6 +11,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 Role = Literal["operator", "approver", "field", "admin"]
 ROLES: frozenset[str] = frozenset({"operator", "approver", "field", "admin"})
 
+# 저장소에 적혀 있는 값들. 운영에서 이대로 뜨면 아무나 승인·연락 기록을 할 수 있다.
+DEV_API_KEYS: frozenset[str] = frozenset({"dev-operator", "dev-approver", "dev-field"})
+DEV_DB_PASSWORDS: frozenset[str] = frozenset({"salgil", "postgres", "password", "changeme"})
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -80,6 +84,40 @@ class Settings(BaseSettings):
     @property
     def auth_enabled(self) -> bool:
         return bool(self.api_key_map)
+
+    @property
+    def is_production_like(self) -> bool:
+        return self.env in ("staging", "production")
+
+    def unsafe_defaults(self) -> list[str]:
+        """운영에 그대로 나가면 안 되는 설정.
+
+        저장소에 적힌 값으로 뜨는 것을 막는다. 경고만 남기면 로그에 묻히고,
+        묻힌 채로 배포된다.
+        """
+        problems: list[str] = []
+
+        if not self.api_key_map:
+            problems.append("SALGIL_API_KEYS 가 비어 있습니다 — 인증이 꺼진 채로 뜹니다")
+        elif DEV_API_KEYS & set(self.api_key_map):
+            problems.append(
+                "SALGIL_API_KEYS 에 저장소에 적힌 개발용 키가 들어 있습니다 "
+                "(dev-operator 등) — 아무나 계획 승인과 주민 연락 기록을 할 수 있습니다"
+            )
+
+        password = self.database_url.partition("://")[2].partition(":")[2].partition("@")[0]
+        if password in DEV_DB_PASSWORDS:
+            problems.append(
+                "SALGIL_DATABASE_URL 의 비밀번호가 기본값입니다 — POSTGRES_PASSWORD 를 바꾸세요"
+            )
+
+        if any(origin.startswith("http://localhost") for origin in self.cors_origin_list):
+            problems.append(
+                "SALGIL_CORS_ORIGINS 에 localhost 가 남아 있습니다 — "
+                "운영 프론트엔드 주소로 바꾸세요"
+            )
+
+        return problems
 
 
 @lru_cache

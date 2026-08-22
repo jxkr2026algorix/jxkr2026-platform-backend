@@ -202,3 +202,61 @@ async def test_auth_required(client, seeded, bad_role_header):
         "/api/v1/communities", headers={**bad_role_header, "Authorization": "Bearer nope"}
     )
     assert response.status_code == 401
+
+
+def test_dev_keys_are_flagged_as_unsafe():
+    """저장소에 적힌 키로 운영에 나가면 아무나 계획을 승인할 수 있다."""
+    from app.core.config import Settings
+
+    settings = Settings(
+        env="production",
+        api_keys="dev-operator:operator",
+        database_url="postgresql+asyncpg://salgil:realsecret@db:5432/salgil",
+        cors_origins="https://salgil.gyeongbuk.kr",
+    )
+    problems = settings.unsafe_defaults()
+    assert any("개발용 키" in p for p in problems)
+
+
+def test_default_database_password_is_flagged():
+    from app.core.config import Settings
+
+    settings = Settings(
+        env="production",
+        api_keys="a-real-key:operator",
+        database_url="postgresql+asyncpg://salgil:salgil@db:5432/salgil",
+        cors_origins="https://salgil.gyeongbuk.kr",
+    )
+    assert any("비밀번호가 기본값" in p for p in settings.unsafe_defaults())
+
+
+def test_localhost_cors_is_flagged():
+    from app.core.config import Settings
+
+    settings = Settings(
+        env="production",
+        api_keys="a-real-key:operator",
+        database_url="postgresql+asyncpg://salgil:realsecret@db:5432/salgil",
+        cors_origins="http://localhost:8080",
+    )
+    assert any("localhost" in p for p in settings.unsafe_defaults())
+
+
+def test_a_properly_configured_production_env_has_no_problems():
+    from app.core.config import Settings
+
+    settings = Settings(
+        env="production",
+        api_keys="9f2c…:operator,7a1b…:approver",
+        database_url="postgresql+asyncpg://salgil:a-real-secret@db:5432/salgil",
+        cors_origins="https://salgil.gyeongbuk.kr",
+    )
+    assert settings.unsafe_defaults() == []
+
+
+def test_local_env_is_not_production_like():
+    from app.core.config import Settings
+
+    assert Settings(env="local").is_production_like is False
+    assert Settings(env="production").is_production_like is True
+    assert Settings(env="staging").is_production_like is True

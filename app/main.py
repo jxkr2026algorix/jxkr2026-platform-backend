@@ -81,8 +81,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         mlengine=settings.mlengine_base_url if settings.mlengine_mode == "http" else None,
         auth_enabled=settings.auth_enabled,
     )
-    if not settings.auth_enabled:
-        log.warning("auth_disabled", detail="SALGIL_API_KEYS 가 비어 있습니다 — 로컬 개발 전용")
+    problems = settings.unsafe_defaults()
+    if problems:
+        if settings.is_production_like:
+            # 뜨지 않는 편이 낫다. 저장소에 적힌 키로 운영에 나가면 아무나
+            # 계획을 승인할 수 있고, 그건 로그 경고로 막을 수 있는 종류가 아니다.
+            joined = "\n  - ".join(problems)
+            raise RuntimeError(
+                f"SALGIL_ENV={settings.env} 인데 안전하지 않은 기본값이 있습니다:"
+                f"\n  - {joined}\n"
+                "로컬에서 이대로 띄우려면 SALGIL_ENV=local 로 두세요."
+            )
+        for problem in problems:
+            log.warning("unsafe_default", detail=problem)
     try:
         yield
     finally:

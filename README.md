@@ -27,13 +27,49 @@ GB SafeData 에는 없는, 있어서도 안 되는 기능이다.
 ## 30초 실행
 
 ```bash
-cp .env.example .env
-docker compose up -d --build
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 curl http://127.0.0.1:8000/readyz
 open http://127.0.0.1:8000/docs
 ```
 
-`docker compose` 는 Postgres 와 API 를 띄우고, 기동 시 마이그레이션과 데모 시드를 적용한다.
+마이그레이션과 데모 시드(마을 4곳·대피소 3곳)가 기동 시 적용된다. `.env` 는 없어도 된다.
+5432 를 다른 프로젝트가 쓰고 있으면 `POSTGRES_PORT=55432` 를 준다.
+
+## 배포
+
+기본 compose 는 개발용 오버레이 없이 뜬다. **다만 그대로 나가면 안 되는 값들이 있어,
+`SALGIL_ENV=production` 이면 그 상태로는 기동을 거절한다.**
+
+```
+RuntimeError: SALGIL_ENV=production 인데 안전하지 않은 기본값이 있습니다:
+  - SALGIL_API_KEYS 에 저장소에 적힌 개발용 키가 들어 있습니다 …
+  - SALGIL_DATABASE_URL 의 비밀번호가 기본값입니다 …
+  - SALGIL_CORS_ORIGINS 에 localhost 가 남아 있습니다 …
+```
+
+경고만 남기면 로그에 묻히고, 묻힌 채로 배포된다. 최소 설정은 이렇다.
+
+```bash
+cat > .env <<EOF
+SALGIL_ENV=production
+POSTGRES_PASSWORD=$(openssl rand -hex 16)
+SALGIL_DATABASE_URL=postgresql+asyncpg://salgil:<위와 같은 값>@db:5432/salgil
+SALGIL_API_KEYS=$(openssl rand -hex 16):operator,$(openssl rand -hex 16):approver,$(openssl rand -hex 16):field
+SALGIL_CORS_ORIGINS=https://console.salgil.gyeongbuk.kr
+SALGIL_ROAD_NETWORK_BBOX=129.10,36.36,129.22,36.44
+EOF
+
+docker compose up -d --build
+```
+
+| 기본값 | 개발 | 운영 |
+| --- | --- | --- |
+| Postgres 포트 | dev 오버레이에서만 노출 | 노출 안 함 |
+| 데모 시드 | 켜짐 | **꺼짐** — 운영 DB 에 가짜 마을이 들어가면 안 된다 |
+| API 키 | 저장소에 적힌 dev 키 | **직접 생성** (안 하면 기동 거절) |
+| ML 서버 | stub | `SALGIL_MLENGINE_*` 설정 |
+
+TLS 는 앞단 리버스 프록시가 맡는다. 이 서비스는 8000 에서 평문 HTTP 로 뜬다.
 
 로컬에서 직접 돌리려면:
 

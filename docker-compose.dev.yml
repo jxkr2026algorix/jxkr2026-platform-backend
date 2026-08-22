@@ -1,0 +1,19 @@
+# 로컬 개발용 오버레이. 운영에는 얹지 않는다.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# 기본 compose 는 Postgres 를 호스트에 노출하지 않는다 — 배포하려고 파일을 고쳐야 하면
+# 언젠가 노출된 채로 나간다.
+
+services:
+  db:
+    ports:
+      # 다른 프로젝트가 5432 를 쓰고 있으면 POSTGRES_PORT 로 옮긴다.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+
+  api:
+    environment:
+      SALGIL_LOG_JSON: "false"
+      SALGIL_ENV: local
+      # 로컬에서는 데모 마을 4곳과 대피소 3곳을 넣는다.
+      SALGIL_RUN_SEED: "1"

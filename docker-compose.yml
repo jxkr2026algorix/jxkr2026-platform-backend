@@ -12,9 +12,9 @@ services:
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C.UTF-8"
     volumes:
       - pgdata:/var/lib/postgresql/data
-    ports:
-      # 로컬에서 psql 로 붙기 위한 것. 운영에서는 이 줄을 지운다.
-      - "${POSTGRES_PORT:-5432}:5432"
+    # 포트를 호스트에 노출하지 않는다. api 는 compose 내부망으로 붙는다.
+    # 로컬에서 psql 을 쓰려면 docker-compose.dev.yml 을 얹는다:
+    #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-salgil} -d ${POSTGRES_DB:-salgil}"]
       interval: 10s
@@ -68,7 +68,9 @@ services:
       SALGIL_ROAD_NETWORK_BBOX: ${SALGIL_ROAD_NETWORK_BBOX:-}
 
       SALGIL_RUN_MIGRATIONS: ${SALGIL_RUN_MIGRATIONS:-1}
-      SALGIL_RUN_SEED: ${SALGIL_RUN_SEED:-1}
+      # 데모 마을·대피소를 넣는다. 운영에서는 0 이어야 한다 —
+      # synthetic 표시가 붙어 있어도 운영 DB 에 가짜 마을이 들어간다.
+      SALGIL_RUN_SEED: ${SALGIL_RUN_SEED:-0}
     volumes:
       # 기본은 이름 있는 볼륨이다 — bbox 를 주면 첫 기동에 받아 여기 남고,
       # 이미지에는 OSM 데이터가 들어가지 않는다.
