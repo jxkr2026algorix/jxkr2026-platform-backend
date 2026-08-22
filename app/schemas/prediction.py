@@ -83,6 +83,22 @@ class PredictionRequest(BaseModel):
     incident_id: str | None = None
 
 
+class ChannelSummary(BaseModel):
+    """출력 채널 하나 — 재난 하나.
+
+    한 모델이 여러 재난을 한 텐서에 담는다 (`weather_extremes` 는 폭염·한파·대설·가뭄).
+    전체 요약만 보면 "64셀이 임계를 넘었다"까지만 알 수 있고 **어느 재난인지 모른다.**
+    화면이 가뭄 경고와 폭염 경고를 구분하려면 이 배열을 읽어야 한다.
+    """
+
+    channel: int
+    hazard: str | None = None
+    max: float | None = None
+    mean: float | None = None
+    p95: float | None = None
+    cells_over_threshold: int | None = None
+
+
 class PredictionSummary(BaseModel):
     """화면이 실제로 쓰는 요약. 격자 원본은 ML 서버가 소유한다."""
 
@@ -94,6 +110,13 @@ class PredictionSummary(BaseModel):
     total_cells: int | None = None
     top_cells: list[dict] = Field(
         default_factory=list, description="[{row, col, value, lat?, lon?}] 상위 셀"
+    )
+    channels: list[ChannelSummary] = Field(
+        default_factory=list,
+        description=(
+            "채널이 여럿일 때 재난별 요약. 전체 요약은 채널 축 최댓값이라 "
+            "어느 재난이 위험한지 말해 주지 않는다"
+        ),
     )
 
 

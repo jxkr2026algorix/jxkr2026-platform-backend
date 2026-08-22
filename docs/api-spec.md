@@ -200,9 +200,16 @@ complete && absence_confirmed 이면       → NONE
   "is_stub": false,
   "model": { "name": "landslide_risk", "version": "3", "backend": "triton" },
   "summary": { "max": 0.87, "mean": 0.21, "p95": 0.63,
-               "cells_over_threshold": 128, "total_cells": 4096, "top_cells": [...] }
+               "cells_over_threshold": 128, "total_cells": 4096, "top_cells": [...],
+               "channels": [ {"channel": 3, "hazard": "drought",
+                              "max": 0.53, "cells_over_threshold": 63} ] }
 }
 ```
+
+**`summary.channels` 가 있으면 그걸 읽어야 한다.** 한 모델이 여러 재난을 한 텐서에 담는
+경우가 있다 — `weather_extremes` 는 폭염·한파·대설·가뭄 넷이다. 전체 요약은 채널 축의
+최댓값이라 "64셀이 임계를 넘었다"까지만 말하고 **어느 재난인지 말해 주지 않는다.**
+실제 값에서 그 64셀 중 63셀이 가뭄이고 한파·대설은 0이었다.
 
 산림청 산사태위험등급 1~5 는 **기관이 보증하는 값**이고 이건 아니다. 같은 화면에서 같은
 모양으로 그리면 안 된다.
@@ -219,7 +226,7 @@ complete && absence_confirmed 이면       → NONE
 | `landslide` | `landslide_risk` |
 | `wildfire` | `wildfire_spread` |
 | `typhoon` | `typhoon_track_intensity` |
-| `heatwave` / `cold_wave` | `weather_extremes` |
+| `heatwave` / `cold_wave` / `heavy_snow` / `drought` | `weather_extremes` (한 모델이 네 재난을 채널로 낸다) |
 
 ---
 

@@ -255,3 +255,71 @@ async def test_client_error_is_also_recorded(client, seeded, session):
         .all()
     )
     assert len(rows) == 1
+
+
+async def test_channel_summary_survives_to_the_client(client, seeded):
+    """재난별 요약이 봉투에서 사라지면 화면은 가뭄 경고와 폭염 경고를 구분할 수 없다."""
+    import httpx
+
+    from app.clients.mlengine import MlEngineClient
+    from app.core.config import Settings
+
+    payload = {
+        "prediction_id": "b0f2c0f0-0000-4000-8000-000000000001",
+        "recipe": "weather_extremes",
+        "status": "succeeded",
+        "model": {"name": "weather_extremes", "version": "1", "backend": "triton"},
+        "region_code": "47750",
+        "summary": {
+            "max": 0.53,
+            "mean": 0.48,
+            "threshold": 0.5,
+            "cells_over_threshold": 64,
+            "total_cells": 256,
+            "channels": [
+                {"channel": 0, "hazard": "heatwave", "max": 0.50, "cells_over_threshold": 1},
+                {"channel": 3, "hazard": "drought", "max": 0.53, "cells_over_threshold": 63},
+            ],
+        },
+        "feature_mode": "synthetic",
+        "is_stub": False,
+        "is_derived": True,
+        "derived_notice": "자체 모델",
+    }
+
+    def handler(request):
+        return httpx.Response(200, json=payload)
+
+    settings = Settings(mlengine_mode="http", mlengine_base_url="http://ml.test", api_keys="")
+    client._transport.app.state.mlengine = MlEngineClient(
+        settings,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://ml.test"),
+    )
+
+    response = await client.post(
+        "/api/v1/predictions",
+        json={"recipe": "weather_extremes", "region_code": "47750"},
+    )
+    assert response.status_code == 201
+    channels = response.json()["summary"]["channels"]
+    assert [c["hazard"] for c in channels] == ["heatwave", "drought"]
+    assert channels[1]["cells_over_threshold"] == 63
+
+
+async def test_channel_summary_is_kept_in_the_run_history(client, seeded, session):
+    """나중에 '그때 어느 재난이 위험했는가'에 답하려면 이력에도 남아야 한다."""
+    from sqlalchemy import select
+
+    from app.db.models import PredictionRun
+
+    await client.post(
+        "/api/v1/predictions",
+        json={"recipe": "weather_extremes", "region_code": "47750"},
+    )
+    rows = (
+        (await session.execute(select(PredictionRun).where(PredictionRun.status == "succeeded")))
+        .scalars()
+        .all()
+    )
+    assert rows
+    assert "channels" in rows[-1].summary
