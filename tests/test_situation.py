@@ -44,9 +44,7 @@ async def test_all_failed_context_is_unverified(client, seeded, fake_gbsafe):
 
 async def test_partial_hazard_exposes_its_limit(client, seeded):
     """지진은 partial 이다 — 갈 곳을 말할 수 없다는 사실이 응답에 실려야 한다."""
-    body = (
-        await client.get("/api/v1/meta/hazards")
-    ).json()
+    body = (await client.get("/api/v1/meta/hazards")).json()
     earthquake = next(h for h in body["hazards"] if h["hazard"] == "earthquake")
     assert earthquake["readiness"] == "partial"
     assert earthquake["can_detect"] is True

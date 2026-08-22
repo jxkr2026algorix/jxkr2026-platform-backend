@@ -23,7 +23,7 @@ from typing import Any
 import httpx
 
 from app.core.config import Settings
-from app.core.errors import UpstreamError, UpstreamTimeout
+from app.core.errors import UpstreamError, UpstreamTimeout, ValidationError
 from app.core.logging import get_logger
 from app.schemas.prediction import (
     FeatureMode,
@@ -52,6 +52,8 @@ RECIPE_FOR_HAZARD: dict[str, Recipe] = {
     "heavy_rain": Recipe.RAIN_NOWCAST,
     "flood": Recipe.FLOOD_EXTENT,
     "landslide": Recipe.LANDSLIDE_RISK,
+    # 산불은 '이미 난 불의 확산'과 '발생 확률'이 다른 모델이다. 기본은 확산이고,
+    # 발생 예측이 필요하면 recipe 를 직접 지정한다.
     "wildfire": Recipe.WILDFIRE_SPREAD,
     "typhoon": Recipe.TYPHOON_TRACK_INTENSITY,
     "heatwave": Recipe.WEATHER_EXTREMES,
@@ -122,10 +124,19 @@ class MlEngineClient:
             return True, "stub 모드 — 실제 추론 서버에 붙어 있지 않습니다", None
         started = time.perf_counter()
         try:
-            await self._request("GET", "/readyz", timeout=5.0)
+            # /readyz 가 아니라 /v1/ping 을 부른다. /readyz 는 인증이 없어서,
+            # 토큰을 compose 에 넣는 것을 잊어도 '준비됨'으로 보고된다 —
+            # 그러면 첫 추론 요청에서야 403 을 만난다.
+            payload = await self._request("GET", "/v1/ping", timeout=5.0)
         except UpstreamError as exc:
             return False, exc.detail, None
-        return True, None, round((time.perf_counter() - started) * 1000, 1)
+        except ValidationError as exc:
+            return False, exc.detail, None
+        detail = None
+        if isinstance(payload, dict) and payload.get("triton_ready") is False:
+            detail = "게이트웨이는 살아 있지만 Triton 이 준비되지 않았습니다"
+            return False, detail, round((time.perf_counter() - started) * 1000, 1)
+        return True, detail, round((time.perf_counter() - started) * 1000, 1)
 
     # ── 내부 ──────────────────────────────────────────────────────────────────
 
@@ -148,9 +159,17 @@ class MlEngineClient:
         except httpx.HTTPError as exc:
             raise UpstreamError(f"ML 추론 서버 {path} 요청 실패: {exc}", upstream=UPSTREAM) from exc
 
-        if response.status_code == 401 or response.status_code == 403:
+        if response.status_code in (401, 403):
             raise UpstreamError(
                 "ML 추론 서버 인증에 실패했습니다 — SALGIL_MLENGINE_API_KEY 를 확인하세요",
+                upstream=UPSTREAM,
+                upstream_status=response.status_code,
+            )
+        if response.status_code in (400, 404, 422):
+            # 상류가 4xx 를 준 것은 **우리 요청이 틀렸다**는 뜻이다. 502 로 올리면
+            # 호출자에게 "ML 서버가 죽었다"로 읽혀 엉뚱한 곳을 보게 된다.
+            raise ValidationError(
+                _upstream_detail(response) or "ML 추론 서버가 요청을 거절했습니다",
                 upstream=UPSTREAM,
                 upstream_status=response.status_code,
             )
@@ -167,6 +186,19 @@ class MlEngineClient:
             raise UpstreamError(
                 f"ML 추론 서버 응답이 JSON 이 아닙니다: {response.text[:200]}", upstream=UPSTREAM
             ) from exc
+
+
+def _upstream_detail(response: httpx.Response) -> str | None:
+    """상류의 problem+json 에서 사람이 읽을 사유만 꺼낸다."""
+    try:
+        body = response.json()
+    except ValueError:
+        return response.text[:300] or None
+    if isinstance(body, dict):
+        detail = body.get("detail") or body.get("title")
+        if isinstance(detail, str):
+            return detail
+    return None
 
 
 # ── 스텁 ──────────────────────────────────────────────────────────────────────

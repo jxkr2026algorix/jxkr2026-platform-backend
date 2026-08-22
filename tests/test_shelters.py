@@ -34,9 +34,7 @@ async def test_distance_sorted_when_coordinates_given(client, seeded):
 
 async def test_capacity_basis_is_disclosed(client, seeded):
     """정원은 연 1회 갱신 파일 기준이다 — 실시간 수용현황이 아니라는 사실이 실려야 한다."""
-    rows = (
-        await client.get("/api/v1/shelters", params={"hazard": "landslide"})
-    ).json()
+    rows = (await client.get("/api/v1/shelters", params={"hazard": "landslide"})).json()
     assert all(r["capacity_basis"] for r in rows)
 
 

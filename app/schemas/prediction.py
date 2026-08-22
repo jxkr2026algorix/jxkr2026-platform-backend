@@ -31,6 +31,7 @@ class Recipe(StrEnum):
     TYPHOON_TRACK_INTENSITY = "typhoon_track_intensity"
     WEATHER_EXTREMES = "weather_extremes"
     WILDFIRE_SPREAD = "wildfire_spread"
+    KOREA_WILDFIRE_IGNITION = "korea_wildfire_ignition"
 
 
 class FeatureMode(StrEnum):

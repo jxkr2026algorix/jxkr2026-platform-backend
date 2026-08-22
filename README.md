@@ -61,6 +61,16 @@ SALGIL_MLENGINE_API_KEY=<ML 서버와 같은 토큰>
 `SALGIL_MLENGINE_MODE=stub` (기본값)이면 ML 서버 없이도 전체 API 가 동작한다. 스텁 응답은
 결정론적이고 `is_stub=true` 를 달고 나가므로 화면에서 진짜 예측과 구분된다.
 
+연결 확인은 `/readyz` 하나면 된다.
+
+```bash
+curl -s localhost:8000/readyz | jq '.components[] | select(.name=="mlengine")'
+```
+
+`ok: false` 에 "SALGIL_MLENGINE_API_KEY 를 확인하세요"가 나오면 토큰이 다른 것이다.
+이 점검은 ML 서버의 **인증이 걸린** `/v1/ping` 을 부른다 — 인증 없는 `/readyz` 를 찌르면
+토큰을 빠뜨려도 '준비됨'으로 보고되고, 첫 추론 요청에서야 403 을 만난다.
+
 ---
 
 ## 화면이 반드시 지켜야 하는 것 — 3상태

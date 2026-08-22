@@ -47,7 +47,12 @@ extend-exclude = [".venv", "alembic/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "ASYNC"]
-ignore = ["B008"]  # FastAPI Depends() in defaults is the framework idiom
+ignore = [
+    "B008",    # FastAPI 의 Depends() 기본값은 프레임워크 관용이다
+    "RUF001",  # 격자 형상을 "16×16" 으로 적는다. 곱셈기호는 오타가 아니라 의도다
+    "RUF002",
+    "RUF003",
+]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E501"]

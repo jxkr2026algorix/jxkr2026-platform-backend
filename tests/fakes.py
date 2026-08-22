@@ -19,10 +19,27 @@ CAPABILITIES: dict[str, Any] = {
             "can_detect": True,
             "can_say_where_to_go": True,
             "axes": {
-                "detection": {"label": "탐지", "usable": 2, "total": 2, "covered": True,
-                              "sources": ["kma_aws", "hrfco_rain"]},
-                "risk": {"label": "위험도", "usable": 4, "total": 4, "covered": True, "sources": []},
-                "shelter": {"label": "대피소", "usable": 1, "total": 1, "covered": True, "sources": []},
+                "detection": {
+                    "label": "탐지",
+                    "usable": 2,
+                    "total": 2,
+                    "covered": True,
+                    "sources": ["kma_aws", "hrfco_rain"],
+                },
+                "risk": {
+                    "label": "위험도",
+                    "usable": 4,
+                    "total": 4,
+                    "covered": True,
+                    "sources": [],
+                },
+                "shelter": {
+                    "label": "대피소",
+                    "usable": 1,
+                    "total": 1,
+                    "covered": True,
+                    "sources": [],
+                },
             },
             "missing_axes": [],
             "caveat": None,
@@ -75,7 +92,12 @@ PARTIAL_FAILURE_ENVELOPE: dict[str, Any] = {
         },
     ],
     "degradations": [
-        {"dataset_id": "15074800", "status": "not_authorized", "detail": "HTTP 403", "blocks_interpretation": True}
+        {
+            "dataset_id": "15074800",
+            "status": "not_authorized",
+            "detail": "HTTP 403",
+            "blocks_interpretation": True,
+        }
     ],
     "caveats": [],
     "complete": False,
@@ -125,14 +147,20 @@ class FakeGbSafeClient:
 
     async def regions(self) -> dict[str, Any]:
         self.calls.append("regions")
-        return {"count": 1, "regions": [{"code": "47750", "name": "청송군",
-                                         "center": {"lat": 36.4363, "lon": 129.0570}}]}
+        return {
+            "count": 1,
+            "regions": [
+                {"code": "47750", "name": "청송군", "center": {"lat": 36.4363, "lon": 129.0570}}
+            ],
+        }
 
     async def hazard_context(self, region: str, hazard: str | None = None) -> Envelope:
         self.calls.append(f"context:{region}:{hazard}")
         return Envelope.from_upstream(self.envelope)
 
-    async def source(self, connector: str, region: str | None = None, rows: int | None = None) -> Envelope:
+    async def source(
+        self, connector: str, region: str | None = None, rows: int | None = None
+    ) -> Envelope:
         self.calls.append(f"source:{connector}")
         return Envelope.from_upstream(self.envelope)
 

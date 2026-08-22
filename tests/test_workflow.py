@@ -53,9 +53,7 @@ async def test_operator_cannot_approve(client, seeded):
     incident_id = await _incident(client)
     plan_id = await _plan(client, incident_id, await _communities(client))
 
-    response = await client.post(
-        f"/api/v1/plans/{plan_id}/approve", json={"approver": "본인"}
-    )
+    response = await client.post(f"/api/v1/plans/{plan_id}/approve", json={"approver": "본인"})
     assert response.status_code == 403
 
 
@@ -88,9 +86,7 @@ async def test_double_approval_conflicts(client, seeded):
     assert (
         await client.post(f"/api/v1/plans/{plan_id}/approve", json=payload, headers=APPROVER)
     ).status_code == 200
-    second = await client.post(
-        f"/api/v1/plans/{plan_id}/approve", json=payload, headers=APPROVER
-    )
+    second = await client.post(f"/api/v1/plans/{plan_id}/approve", json=payload, headers=APPROVER)
     assert second.status_code == 409
 
 
@@ -140,9 +136,7 @@ async def test_unreachable_becomes_field_task(client, seeded):
         f"/api/v1/plans/{plan_id}/approve", json={"approver": "김과장"}, headers=APPROVER
     )
     contacts = (
-        await client.post(
-            f"/api/v1/incidents/{incident_id}/contacts", json={"channel": "call"}
-        )
+        await client.post(f"/api/v1/incidents/{incident_id}/contacts", json={"channel": "call"})
     ).json()
 
     await client.patch(
@@ -158,9 +152,7 @@ async def test_unreachable_becomes_field_task(client, seeded):
     assert rollup["unreachable"] == 1
     assert rollup["needs_field_verification"] == 1
 
-    generated = await client.post(
-        f"/api/v1/incidents/{incident_id}/tasks/from-unreachable"
-    )
+    generated = await client.post(f"/api/v1/incidents/{incident_id}/tasks/from-unreachable")
     assert generated.status_code == 200
     tasks = generated.json()
     assert len(tasks) == 1

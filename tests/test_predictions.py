@@ -82,3 +82,107 @@ async def test_catalog_lists_every_recipe(client, seeded):
     assert "landslide_risk" in names
     assert "wildfire_spread" in names
     assert body["served_by"] == "stub"
+
+
+async def test_upstream_client_error_becomes_422_not_502(client, seeded, monkeypatch):
+    """ML 서버가 4xx 를 주면 우리 요청이 틀린 것이다 — 502 로 올리면 엉뚱한 곳을 보게 된다."""
+    import httpx
+
+    from app.clients.mlengine import MlEngineClient
+    from app.core.config import Settings
+
+    def handler(request):
+        return httpx.Response(
+            422,
+            json={"title": "입력이 모델과 맞지 않습니다", "detail": "16×16 격자를 받습니다"},
+        )
+
+    settings = Settings(mlengine_mode="http", mlengine_base_url="http://ml.test", api_keys="")
+    http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://ml.test"
+    )
+    client._transport.app.state.mlengine = MlEngineClient(settings, client=http_client)
+
+    response = await client.post(
+        "/api/v1/predictions",
+        json={
+            "recipe": "landslide_risk",
+            "region_code": "47750",
+            "grid": {"height": 64, "width": 64},
+        },
+    )
+    assert response.status_code == 422
+    assert "16×16" in response.json()["detail"]
+
+
+async def test_upstream_auth_failure_is_502_with_hint(client, seeded):
+    import httpx
+
+    from app.clients.mlengine import MlEngineClient
+    from app.core.config import Settings
+
+    def handler(request):
+        return httpx.Response(403, json={"detail": "알 수 없는 토큰입니다"})
+
+    settings = Settings(mlengine_mode="http", mlengine_base_url="http://ml.test", api_keys="")
+    http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://ml.test"
+    )
+    client._transport.app.state.mlengine = MlEngineClient(settings, client=http_client)
+
+    response = await client.post(
+        "/api/v1/predictions", json={"recipe": "landslide_risk", "region_code": "47750"}
+    )
+    assert response.status_code == 502
+    assert "SALGIL_MLENGINE_API_KEY" in response.json()["detail"]
+
+
+async def test_readiness_detects_bad_ml_token(client, seeded):
+    """토큰을 compose 에 넣는 것을 잊는 것이 가장 흔한 배포 실수다.
+
+    인증 없는 /readyz 를 찌르면 '준비됨'으로 보고되고, 첫 추론에서야 403 을 만난다.
+    그래서 인증이 걸린 /v1/ping 을 부른다.
+    """
+    import httpx
+
+    from app.clients.mlengine import MlEngineClient
+    from app.core.config import Settings
+
+    seen: list[str] = []
+
+    def handler(request):
+        seen.append(request.url.path)
+        return httpx.Response(403, json={"detail": "알 수 없는 토큰입니다"})
+
+    settings = Settings(mlengine_mode="http", mlengine_base_url="http://ml.test", api_keys="")
+    ml = MlEngineClient(
+        settings,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://ml.test"),
+    )
+
+    ok, detail, _ = await ml.ping()
+    assert ok is False
+    assert "SALGIL_MLENGINE_API_KEY" in detail
+    assert seen == ["/v1/ping"]  # 인증 없는 /readyz 를 부르지 않는다
+    await ml.aclose()
+
+
+async def test_readiness_flags_triton_not_loaded(client, seeded):
+    """게이트웨이는 살아 있는데 Triton 이 안 떠 있으면 준비된 것이 아니다."""
+    import httpx
+
+    from app.clients.mlengine import MlEngineClient
+    from app.core.config import Settings
+
+    def handler(request):
+        return httpx.Response(200, json={"ok": True, "backend": "triton", "triton_ready": False})
+
+    settings = Settings(mlengine_mode="http", mlengine_base_url="http://ml.test", api_keys="")
+    ml = MlEngineClient(
+        settings,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://ml.test"),
+    )
+    ok, detail, _ = await ml.ping()
+    assert ok is False
+    assert "Triton" in detail
+    await ml.aclose()
