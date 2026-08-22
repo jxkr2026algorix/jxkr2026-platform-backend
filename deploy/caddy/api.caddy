@@ -1,0 +1,26 @@
+# SALGIL 플랫폼 백엔드 — 운영 상태(상황·계획·승인·연락·임무)를 소유하는 서비스.
+#
+# 컨테이너는 127.0.0.1:8001 에만 열려 있다. 8000 은 gbsafedata 가 쓰고 있고,
+# 이 서버는 공인 IPv4 가 있어 0.0.0.0 에 걸면 Cloudflare 를 우회해 오리진이
+# 그대로 노출된다.
+
+api.salgil.gyeongbuk.kr {
+	tls internal
+
+	reverse_proxy 127.0.0.1:8001 {
+		header_up X-Real-IP {http.request.header.CF-Connecting-IP}
+
+		# 상황 조회는 gbsafedata 로 다시 나가고, 그쪽은 정부 API 여러 곳으로
+		# 팬아웃한다. 백엔드의 gbsafe_context_timeout 이 120s 라 그보다 짧게
+		# 끊으면 앞단이 먼저 포기해 원인이 뒤바뀐다.
+		transport http {
+			read_timeout 180s
+			write_timeout 180s
+		}
+	}
+
+	log {
+		output stderr
+		format console
+	}
+}
