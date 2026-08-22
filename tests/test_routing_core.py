@@ -394,3 +394,43 @@ class TestGraphCache:
 
         assert from_cache.nearest_node(BASE_LAT, BASE_LON) == built.nearest_node(BASE_LAT, BASE_LON)
         assert from_cache.nearest_node(BASE_LAT, BASE_LON) is not None
+
+
+class TestGraphLoadingDoesNotBlockTheLoop:
+    """경북 전역 그래프는 만드는 데 수 분이 걸리는 CPU 작업이다. 이벤트 루프
+    위에서 하면 그동안 이 서비스의 모든 요청이 멈춘다 — 헬스체크까지 막혀
+    컨테이너가 unhealthy 로 떨어진 적이 있다."""
+
+    @pytest.mark.anyio
+    async def test_other_work_proceeds_while_a_graph_loads(self, tmp_path, monkeypatch):
+        import asyncio
+        import time
+
+        from app.core.config import Settings
+        from app.services import routing as routing_service
+
+        path = tmp_path / "roads.geojson"
+        path.write_text(json.dumps(_grid_geojson()), encoding="utf-8")
+
+        def slow_load(_path: str, mode: str):
+            time.sleep(0.4)  # 그래프 구축을 대신하는 동기 CPU 작업
+            return load_road_graph(path, profile_for(mode))
+
+        monkeypatch.setattr(routing_service, "_load_graph_cached", slow_load)
+        monkeypatch.setattr(routing_service, "_graph_locks", {})
+
+        ticks = 0
+
+        async def heartbeat() -> None:
+            nonlocal ticks
+            for _ in range(20):
+                await asyncio.sleep(0.02)
+                ticks += 1
+
+        settings = Settings(road_network_path=str(path))
+        beat = asyncio.create_task(heartbeat())
+        graph = await routing_service.get_graph(settings, TransportMode.FOOT)
+        await beat
+
+        assert len(graph) > 0
+        assert ticks > 5, f"그래프를 읽는 동안 루프가 멈췄습니다 (틱 {ticks}회)"

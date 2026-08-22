@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -58,16 +59,31 @@ def road_network_available(settings: Settings) -> bool:
     return bool(settings.road_network_path)
 
 
-def get_graph(settings: Settings, mode: TransportMode) -> RoadGraph:
+# 수단별 잠금. lru_cache 는 같은 인자로 동시에 들어온 호출을 합쳐 주지 않아서,
+# 콜드 상태에서 요청 둘이 겹치면 같은 그래프를 두 번 만들고 메모리도 두 배로 쓴다.
+_graph_locks: dict[str, asyncio.Lock] = {}
+
+
+async def get_graph(settings: Settings, mode: TransportMode) -> RoadGraph:
+    """그래프를 스레드에서 읽는다.
+
+    경북 전역 도로망은 만드는 데 수 분이 걸리는 순수 CPU 작업이다. 이벤트 루프
+    위에서 하면 그동안 이 서비스의 **모든** 요청이 멈춘다 — 경로뿐 아니라 상황
+    조회도, 헬스체크도. 실제로 컨테이너가 unhealthy 로 떨어졌다.
+    """
     if not settings.road_network_path:
         raise ValidationError(
             "도로망이 설정되지 않았습니다 — SALGIL_ROAD_NETWORK_PATH 에 OSM 추출본을 "
             "지정하세요. 도로망 없이 경로를 만들면 지도 위에 그럴듯한 직선이 그려질 뿐입니다"
         )
-    try:
-        return _load_graph_cached(settings.road_network_path, mode.value)
-    except FileNotFoundError as exc:
-        raise ValidationError(str(exc)) from exc
+    lock = _graph_locks.setdefault(mode.value, asyncio.Lock())
+    async with lock:
+        try:
+            return await asyncio.to_thread(
+                _load_graph_cached, settings.road_network_path, mode.value
+            )
+        except FileNotFoundError as exc:
+            raise ValidationError(str(exc)) from exc
 
 
 async def _field_blocks(session: AsyncSession, incident_id: uuid.UUID) -> list[BlockedPoint]:
@@ -239,7 +255,7 @@ async def plan_evacuation(
 ) -> RoutePlan:
     warnings: list[str] = []
     profile = profile_for(payload.mode)
-    graph = get_graph(settings, payload.mode)
+    graph = await get_graph(settings, payload.mode)
 
     origin_community: Community | None = None
     if payload.community_id is not None:
