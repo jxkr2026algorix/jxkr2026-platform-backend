@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -29,20 +30,35 @@ from pathlib import Path
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
 
-def fetch(bbox: tuple[float, float, float, float], timeout_s: int) -> dict:
+def fetch(bbox: tuple[float, float, float, float], timeout_s: int, attempts: int = 3) -> dict:
+    """Overpass 는 공개 API 라 혼잡할 때 504/429 를 낸다. 몇 번 물러났다 다시 시도한다.
+
+    운영에서 이 경로에 기대지 않는 편이 낫다 — 미리 만든 파일을 붙이거나 이미지에
+    구우면 기동이 외부 서비스 상태에 걸리지 않는다.
+    """
     min_lon, min_lat, max_lon, max_lat = bbox
     query = (
         f"[out:json][timeout:{timeout_s}];"
         f'way["highway"]({min_lat},{min_lon},{max_lat},{max_lon});'
         "out geom;"
     )
-    request = urllib.request.Request(
-        OVERPASS_URL,
-        data=urllib.parse.urlencode({"data": query}).encode(),
-        headers={"User-Agent": "salgil-platform-backend/0.1 (+jxkr2026)"},
-    )
-    with urllib.request.urlopen(request, timeout=timeout_s + 30) as response:
-        return json.loads(response.read().decode())
+    last: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        request = urllib.request.Request(
+            OVERPASS_URL,
+            data=urllib.parse.urlencode({"data": query}).encode(),
+            headers={"User-Agent": "salgil-platform-backend/0.1 (+jxkr2026)"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout_s + 30) as response:
+                return json.loads(response.read().decode())
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            last = exc
+            if attempt < attempts:
+                delay = 5 * attempt
+                print(f"  {attempt}회차 실패 ({exc}) — {delay}초 뒤 재시도", file=sys.stderr)
+                time.sleep(delay)
+    raise RuntimeError(f"Overpass 조회를 {attempts}회 시도했으나 실패했습니다: {last}")
 
 
 def to_geojson(payload: dict) -> dict:
@@ -74,6 +90,7 @@ def main() -> int:
     )
     parser.add_argument("--output", type=Path, default=Path("data/local/roads.geojson"))
     parser.add_argument("--timeout", type=int, default=120)
+    parser.add_argument("--attempts", type=int, default=3)
     args = parser.parse_args()
 
     try:
@@ -86,9 +103,13 @@ def main() -> int:
 
     print(f"▸ Overpass 조회 {bbox}")
     try:
-        payload = fetch(bbox, args.timeout)  # type: ignore[arg-type]
-    except urllib.error.URLError as exc:
+        payload = fetch(bbox, args.timeout, attempts=args.attempts)  # type: ignore[arg-type]
+    except (RuntimeError, urllib.error.URLError) as exc:
         print(f"Overpass 조회 실패: {exc}", file=sys.stderr)
+        print(
+            "  미리 만든 파일을 쓰거나 Geofabrik 덤프 + osmium 을 쓰는 편이 안정적입니다",
+            file=sys.stderr,
+        )
         return 1
 
     collection = to_geojson(payload)

@@ -37,6 +37,26 @@ PY
   done
 }
 
+# 도로망이 지정됐는데 파일이 없고 bbox 가 있으면 받아 온다.
+# 이미지에 굽지 않으므로 이미지는 ODbL 대상이 아니고, 받은 파일은 볼륨에 남아
+# 다음 기동에서 재사용된다. 첫 기동에만 네트워크가 필요하다.
+if [ -n "${SALGIL_ROAD_NETWORK_PATH:-}" ] && [ ! -f "$SALGIL_ROAD_NETWORK_PATH" ]; then
+  if [ -n "${SALGIL_ROAD_NETWORK_BBOX:-}" ]; then
+    echo "▸ 도로망 내려받기 (OSM/ODbL) — bbox=${SALGIL_ROAD_NETWORK_BBOX}"
+    if python scripts/build_road_network.py \
+        --bbox "$SALGIL_ROAD_NETWORK_BBOX" \
+        --output "$SALGIL_ROAD_NETWORK_PATH"; then
+      :
+    else
+      # 경로 계산만 못 하게 두고 서비스는 뜬다. 상황·계획·연락은 도로망 없이도 돌아간다.
+      echo "  도로망을 받지 못했습니다 — 경로 계산은 거절되고 나머지는 정상 동작합니다" >&2
+    fi
+  else
+    echo "▸ 도로망 파일이 없습니다: $SALGIL_ROAD_NETWORK_PATH" >&2
+    echo "  SALGIL_ROAD_NETWORK_BBOX 를 주면 첫 기동에 받아 옵니다" >&2
+  fi
+fi
+
 if [ "$RUN_MIGRATIONS" = "1" ]; then
   echo "▸ 데이터베이스 대기"
   wait_for_db

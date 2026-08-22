@@ -145,16 +145,37 @@ OSM 도로망 위에서 이동수단별로 경로를 낸다. 산불처럼 **퍼�
 위험**을 반영한다 — 각 지점을 지나는 시각의 위험으로 판단하므로, 같은 요청이라도 출발이
 늦으면 경로가 달라진다.
 
+### 도로망을 넣는 세 가지 방법
+
+| 방법 | 이미지 | 기동 | 언제 |
+| --- | --- | --- | --- |
+| **① 첫 기동에 받기** (기본) | 깨끗 | 첫 기동만 네트워크 | 대부분의 경우 |
+| ② 미리 만든 파일 마운트 | 깨끗 | 네트워크 불필요 | 폐쇄망, 큰 범위 |
+| ③ 이미지에 굽기 | **ODbL 대상** | 즉시 | 자체 레지스트리, 재현성 |
+
 ```bash
-# 도로망을 먼저 만든다 (커밋하지 않는다 — ODbL)
+# ① bbox 만 주면 첫 기동에 받아 볼륨에 남는다. 재기동 시 다시 받지 않는다.
+SALGIL_ROAD_NETWORK_BBOX=129.10,36.36,129.22,36.44 docker compose up -d
+
+# ② 미리 만들어 붙인다
 uv run python scripts/build_road_network.py \
     --bbox 129.10,36.36,129.22,36.44 --output data/local/roads.geojson
+ROAD_NETWORK_DIR=./data/local docker compose up -d
 
-SALGIL_ROAD_NETWORK_PATH=data/local/roads.geojson uv run uvicorn app.main:app
+# ③ 이미지에 굽는다 — 마운트도 볼륨도 없이 바로 돈다
+docker build --build-arg ROAD_NETWORK_BBOX=129.10,36.36,129.22,36.44 -t salgil/backend .
 ```
 
-도로망이 없으면 경로 계산이 **거절된다.** 도로망 없이 경로를 내면 지도 위에 그럴듯한
-직선이 그려질 뿐이다.
+**③을 고르면 이미지가 ODbL 파생물이 된다.** 레지스트리에 올리는 순간 배포이므로 출처 표시와
+파생 데이터베이스 제공 의무가 이미지에 따라붙는다. 그 사실이 이미지에 남도록
+`NOTICE-OSM.txt` 와 `org.opencontainers.image.licenses=Apache-2.0 AND ODbL-1.0` 라벨이 붙는다.
+**KOGL 정부 데이터를 같은 배포물에 병합하면 share-alike 가 정부 데이터에까지 얹힌다.**
+
+경로는 하나다(`/data/road/roads.geojson`). 볼륨을 붙이면 구운 파일을 덮는다 — 마운트가
+이기는 것이 기대되는 우선순위다.
+
+도로망이 없으면 경로 계산만 **거절되고** 나머지(상황·계획·연락·현장)는 정상 동작한다.
+도로망 없이 경로를 내면 지도 위에 그럴듯한 직선이 그려질 뿐이다.
 
 현장 보고에 통제 구간이 실리면 그 지점이 차단으로 들어간다 — 예측은 확률이지만 현장 보고는
 사람이 가서 본 것이라 더 강하다.
