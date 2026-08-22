@@ -12,8 +12,12 @@ ODbL 이 된다. 경로는 `SALGIL_ROAD_NETWORK_PATH` 로 실행 시점에 주�
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import os
+import pickle
+import tempfile
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,6 +43,11 @@ _NODE_PRECISION = 7
 # 아니라 그럴듯한 거짓말이다. 그래서 간격을 두고 남겨 스냅 오차를 이 값의 절반으로
 # 묶는다.
 _MIN_NODE_SPACING_M = 150.0
+
+# 직렬화된 그래프의 형식 번호. 그래프의 모양이나 **내용을 만드는 방식**이 바뀌면
+# 올린다. 형상점 축약을 넣었을 때 이걸 안 올려서, 축약 전에 만들어 둔 캐시가
+# 그대로 읽히고 축약이 통째로 건너뛰어졌다.
+_CACHE_VERSION = 2
 
 
 def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -142,6 +151,57 @@ class RoadGraph:
             if best is not None and not found_this_ring and radius > 0:
                 break
         return best
+
+
+def _source_fingerprint(source: Path) -> str:
+    """도로망 파일 내용의 해시.
+
+    크기와 수정시각으로도 대개 맞지만 같은 크기로 덮어써지는 경우를 놓친다.
+    그때 나오는 것은 옛 지도로 계산한 대피 경로다. 160MB 를 읽는 데 1초가 안
+    걸리고 그래프를 다시 만드는 데는 2분이 걸리므로 확실한 쪽을 택한다.
+    """
+    digest = hashlib.blake2b(digest_size=16)
+    with source.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _cache_path(source: Path, profile: ModeProfile, fingerprint: str) -> Path:
+    name = f"{fingerprint}-{profile.mode.value}-v{_CACHE_VERSION}.pickle"
+    return source.parent / ".graph-cache" / name
+
+
+def _read_cache(cache: Path, profile: ModeProfile) -> RoadGraph | None:
+    if not cache.is_file():
+        return None
+    try:
+        with cache.open("rb") as handle:
+            graph = pickle.load(handle)
+    except Exception as exc:
+        # 캐시가 깨졌다고 경로 계산을 못 하게 둘 이유는 없다. 다시 만들면 된다.
+        log.warning("road_graph_cache_unreadable", path=str(cache), error=str(exc))
+        return None
+    if not isinstance(graph, RoadGraph):
+        log.warning("road_graph_cache_wrong_type", path=str(cache))
+        return None
+    log.info("road_graph_cache_hit", mode=profile.mode.value, nodes=len(graph))
+    return graph
+
+
+def _write_cache(cache: Path, graph: RoadGraph) -> None:
+    """임시 파일에 쓴 뒤 옮긴다. rename 은 원자적이라, 쓰는 도중에 죽어도
+    반쪽짜리 파일이 다음 기동에서 캐시로 읽히지 않는다."""
+    try:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=cache.parent, delete=False) as tmp:
+            pickle.dump(graph, tmp, protocol=pickle.HIGHEST_PROTOCOL)
+            temporary = Path(tmp.name)
+        os.replace(temporary, cache)
+        log.info("road_graph_cached", nodes=len(graph), bytes=cache.stat().st_size)
+    except OSError as exc:
+        # 볼륨이 읽기 전용이면 매번 다시 만들 뿐 동작에는 지장이 없다.
+        log.warning("road_graph_cache_unwritable", path=str(cache), error=str(exc))
 
 
 def _contract(graph: RoadGraph, spacing_m: float = _MIN_NODE_SPACING_M) -> RoadGraph:
@@ -254,6 +314,13 @@ def load_road_graph(path: str | Path, profile: ModeProfile) -> RoadGraph:
     if not source.is_file():
         raise FileNotFoundError(f"도로망 파일이 없습니다: {source}")
 
+    # 원본이 그대로면 결과도 그대로다. 만들어 둔 것이 있으면 그것을 쓴다.
+    fingerprint = _source_fingerprint(source)
+    cache = _cache_path(source, profile, fingerprint)
+    cached = _read_cache(cache, profile)
+    if cached is not None:
+        return cached
+
     graph = RoadGraph(source=str(source))
     skipped: dict[str, int] = {}
 
@@ -297,4 +364,6 @@ def load_road_graph(path: str | Path, profile: ModeProfile) -> RoadGraph:
         ways=graph.way_count,
         skipped=dict(sorted(skipped.items(), key=lambda kv: -kv[1])[:5]),
     )
-    return _contract(graph)
+    contracted = _contract(graph)
+    _write_cache(cache, contracted)
+    return contracted

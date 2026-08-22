@@ -313,3 +313,84 @@ class TestContraction:
         graph = self._load(tmp_path, payload)
         assert len(graph) > 0, "고리가 통째로 사라졌습니다"
         assert graph.nearest_node(BASE_LAT, BASE_LON, max_distance_m=200.0) is not None
+
+
+class TestGraphCache:
+    """그래프 구축은 경북 전역이면 수단당 2분이 넘는다. 원본이 그대로면 다시
+    만들 이유가 없으므로 직렬화해 두고 꺼내 쓴다."""
+
+    def _load(self, tmp_path, payload=None):
+        path = tmp_path / "roads.geojson"
+        path.write_text(json.dumps(payload or _grid_geojson()), encoding="utf-8")
+        return path, load_road_graph(path, profile_for(TransportMode.FOOT))
+
+    def test_a_cache_is_written_and_reused(self, tmp_path):
+        path, first = self._load(tmp_path)
+        assert len(list((tmp_path / ".graph-cache").glob("*.pickle"))) == 1
+
+        second = load_road_graph(path, profile_for(TransportMode.FOOT))
+        assert len(second) == len(first)
+        assert second.edge_count == first.edge_count
+
+    def test_the_cached_graph_is_the_contracted_one(self, tmp_path):
+        """캐시를 축약 전에 저장하면, 캐시가 있을 때만 그래프가 축약되지 않은
+        채로 돌아온다 — 캐시가 있을수록 느려지고 무거워지는 상태가 된다.
+        실제로 그렇게 배포된 적이 있어서 여기서 잡는다."""
+        chain = {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "id": "way/1",
+                    "properties": {"highway": "residential"},
+                    "geometry": {
+                        "type": "LineString",
+                        "coordinates": [[BASE_LON + i * 0.0001, BASE_LAT] for i in range(200)],
+                    },
+                }
+            ],
+        }
+        path, built = self._load(tmp_path, chain)
+        from_cache = load_road_graph(path, profile_for(TransportMode.FOOT))
+
+        assert len(from_cache) == len(built)
+        assert len(from_cache) < 30, "캐시에서 온 그래프가 축약되지 않았습니다"
+
+    def test_a_changed_source_is_not_served_from_the_old_cache(self, tmp_path):
+        path, first = self._load(tmp_path)
+
+        smaller = _grid_geojson()
+        smaller["features"] = smaller["features"][:2]
+        path.write_text(json.dumps(smaller), encoding="utf-8")
+
+        second = load_road_graph(path, profile_for(TransportMode.FOOT))
+        assert second.way_count != first.way_count
+
+    def test_a_corrupt_cache_falls_back_to_building(self, tmp_path):
+        path, built = self._load(tmp_path)
+        next((tmp_path / ".graph-cache").glob("*.pickle")).write_bytes(b"not a pickle")
+
+        recovered = load_road_graph(path, profile_for(TransportMode.FOOT))
+        assert len(recovered) == len(built)
+
+    def test_an_unwritable_cache_directory_does_not_break_loading(self, tmp_path, monkeypatch):
+        """읽기 전용 볼륨에서도 경로 계산은 되어야 한다. 캐시는 최적화지 조건이 아니다."""
+        from app.routing import graph as graph_module
+
+        path = tmp_path / "roads.geojson"
+        path.write_text(json.dumps(_grid_geojson()), encoding="utf-8")
+
+        def refuse(*args, **kwargs):
+            raise OSError("read-only file system")
+
+        monkeypatch.setattr(graph_module.Path, "mkdir", refuse)
+        assert len(graph_module.load_road_graph(path, profile_for(TransportMode.FOOT))) > 0
+
+    def test_nearest_node_survives_a_round_trip(self, tmp_path):
+        """공간 인덱스는 repr 에서 빠지는 비공개 필드다. 직렬화에서 누락되면
+        캐시로 읽은 그래프는 출발지를 도로에 붙이지 못한다."""
+        path, built = self._load(tmp_path)
+        from_cache = load_road_graph(path, profile_for(TransportMode.FOOT))
+
+        assert from_cache.nearest_node(BASE_LAT, BASE_LON) == built.nearest_node(BASE_LAT, BASE_LON)
+        assert from_cache.nearest_node(BASE_LAT, BASE_LON) is not None
