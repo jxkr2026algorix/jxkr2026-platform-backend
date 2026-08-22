@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - run: uv sync --extra dev --frozen
+
+      - name: ruff
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: mypy
+        run: uv run mypy app
+        continue-on-error: true
+
+      # 상류(GB SafeData, ML 서버)는 호출하지 않는다 — 전부 목이다.
+      - name: pytest
+        run: uv run pytest -q --cov --cov-report=term-missing
+
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: salgil
+          POSTGRES_PASSWORD: salgil
+          POSTGRES_DB: salgil
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U salgil"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      SALGIL_DATABASE_URL: postgresql+asyncpg://salgil:salgil@127.0.0.1:5432/salgil
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --extra dev --frozen
+
+      - name: alembic upgrade head
+        run: uv run alembic upgrade head
+
+      # 모델과 마이그레이션이 갈라지면 배포 후에야 알게 된다. 여기서 잡는다.
+      - name: 미반영 모델 변경이 없는가
+        run: |
+          uv run alembic check
+
+      - name: 시드가 도는가
+        run: uv run salgil seed
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: salgil/platform-backend:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

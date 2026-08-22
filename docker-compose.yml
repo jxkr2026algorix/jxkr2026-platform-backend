@@ -1,0 +1,63 @@
+name: jxkr2026-platform-backend
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-salgil}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-salgil}
+      POSTGRES_DB: ${POSTGRES_DB:-salgil}
+      # 한국어 정렬을 위해 C.UTF-8 을 명시한다.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C.UTF-8"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # 로컬에서 psql 로 붙기 위한 것. 운영에서는 이 줄을 지운다.
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-salgil} -d ${POSTGRES_DB:-salgil}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SALGIL_ENV: ${SALGIL_ENV:-local}
+      SALGIL_LOG_LEVEL: ${SALGIL_LOG_LEVEL:-INFO}
+      SALGIL_LOG_JSON: ${SALGIL_LOG_JSON:-true}
+
+      SALGIL_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-salgil}:${POSTGRES_PASSWORD:-salgil}@db:5432/${POSTGRES_DB:-salgil}
+
+      # ── 공공데이터 상류 (읽기 전용) ──────────────────────────────────────
+      SALGIL_GBSAFE_BASE_URL: ${SALGIL_GBSAFE_BASE_URL:-https://datainfra.salgil.gyeongbuk.kr}
+      SALGIL_GBSAFE_TIMEOUT_S: ${SALGIL_GBSAFE_TIMEOUT_S:-30}
+      SALGIL_GBSAFE_CONTEXT_TIMEOUT_S: ${SALGIL_GBSAFE_CONTEXT_TIMEOUT_S:-120}
+
+      # ── ML 추론 서버 (Lambda H100 · Triton) ─────────────────────────────
+      # 여기 URL 과 토큰만 채우면 붙는다. 비워 두면 stub 으로 돈다.
+      SALGIL_MLENGINE_MODE: ${SALGIL_MLENGINE_MODE:-stub}
+      SALGIL_MLENGINE_BASE_URL: ${SALGIL_MLENGINE_BASE_URL:-http://127.0.0.1:8900}
+      SALGIL_MLENGINE_API_KEY: ${SALGIL_MLENGINE_API_KEY:-}
+      SALGIL_MLENGINE_TIMEOUT_S: ${SALGIL_MLENGINE_TIMEOUT_S:-60}
+
+      # ── 인증 ─────────────────────────────────────────────────────────────
+      SALGIL_API_KEYS: ${SALGIL_API_KEYS:-dev-operator:operator,dev-approver:approver,dev-field:field}
+
+      SALGIL_CORS_ORIGINS: ${SALGIL_CORS_ORIGINS:-http://localhost:8080,http://localhost:8081,http://localhost:8082,http://localhost:5173,http://localhost:5174,http://localhost:5175}
+
+      SALGIL_RUN_MIGRATIONS: ${SALGIL_RUN_MIGRATIONS:-1}
+      SALGIL_RUN_SEED: ${SALGIL_RUN_SEED:-1}
+    ports:
+      - "${API_PORT:-8000}:8000"
+
+volumes:
+  pgdata:
