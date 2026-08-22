@@ -1,0 +1,49 @@
+# salgil-aws 배포용 오버레이.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.deploy.yml up -d
+#
+# 기본 compose 와 다른 점 셋:
+#
+#  1. db 서비스를 쓰지 않는다. 이 서버에는 salgil-infra 스택의 Postgres 17 이
+#     이미 떠 있고, 인스턴스를 하나 더 세우면 같은 머신에서 메모리와 커넥션을
+#     두 번 잡는다. 그쪽에 platform 데이터베이스를 따로 팠다.
+#  2. 그래서 salgil-infra_default 네트워크에 붙는다. 그래야 salgil-postgres 를
+#     호스트명으로 찾는다.
+#  3. 8000 은 gbsafedata-api 가 쓰고 있어 8001 로 나가고, 루프백에만 연다 —
+#     외부 노출은 앞단 Caddy 가 맡는다.
+
+services:
+  db:
+    # 기본 compose 의 db 를 무력화한다. 서비스를 통째로 지울 수는 없어서
+    # (api 의 depends_on 이 참조한다) 아무것도 하지 않고 즉시 끝나는
+    # 컨테이너로 바꾼다. healthcheck 도 이 조건에 맞춰 항상 통과시킨다.
+    image: alpine:3
+    command: ["true"]
+    restart: "no"
+    volumes: []
+    healthcheck:
+      test: ["CMD-SHELL", "true"]
+      interval: 5s
+      retries: 1
+
+  api:
+    depends_on:
+      db:
+        condition: service_completed_successfully
+    environment:
+      # salgil-infra 스택의 Postgres. 값은 .env 에서 온다.
+      SALGIL_DATABASE_URL: ${SALGIL_DATABASE_URL:?SALGIL_DATABASE_URL 이 필요합니다}
+    networks:
+      - default
+      - infra
+    # !override 가 없으면 compose 가 두 파일의 ports 를 **합친다**. 그러면 기본
+    # compose 의 0.0.0.0:8001 과 여기의 127.0.0.1:8001 이 같은 포트를 두 번 잡고,
+    # "address already in use" 가 자기 자신 때문에 난다.
+    ports: !override
+      - "127.0.0.1:${API_PORT:-8001}:8000"
+
+networks:
+  infra:
+    # salgil-infra 스택이 만든 것을 그대로 쓴다. 여기서 만들지 않는다.
+    external: true
+    name: salgil-infra_default
