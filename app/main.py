@@ -35,6 +35,7 @@ from app import __version__
 from app.api.v1.router import api_router
 from app.clients.gbsafe import GbSafeClient
 from app.clients.mlengine import MlEngineClient
+from app.clients.upstage import UpstageClient
 from app.core.config import get_settings
 from app.core.errors import install_exception_handlers
 from app.core.logging import configure_logging, get_logger
@@ -72,6 +73,7 @@ DESCRIPTION = """
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.gbsafe = GbSafeClient(settings)
     app.state.mlengine = MlEngineClient(settings)
+    app.state.upstage = UpstageClient(settings)
     log.info(
         "startup",
         env=settings.env,
@@ -99,6 +101,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         await app.state.gbsafe.aclose()
         await app.state.mlengine.aclose()
+        await app.state.upstage.aclose()
         await dispose_engine()
         log.info("shutdown")
 

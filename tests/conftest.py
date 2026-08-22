@@ -64,10 +64,13 @@ async def session(sessionmaker_) -> AsyncIterator[AsyncSession]:
 @pytest.fixture
 async def client(sessionmaker_, fake_gbsafe) -> AsyncIterator[AsyncClient]:
     from app.clients.mlengine import MlEngineClient
+    from app.clients.upstage import UpstageClient
     from app.main import app
 
     app.state.gbsafe = fake_gbsafe
     app.state.mlengine = MlEngineClient(get_settings())
+    # 키 없이 뜬다. 챗봇만 꺼지고 나머지는 영향받지 않는다는 것도 같이 검증된다.
+    app.state.upstage = UpstageClient(get_settings())
 
     transport = ASGITransport(app=app)
     async with AsyncClient(

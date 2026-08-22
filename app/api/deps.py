@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.gbsafe import GbSafeClient
 from app.clients.mlengine import MlEngineClient
+from app.clients.upstage import UpstageClient
 from app.core.config import Settings, get_settings
 from app.core.security import Principal, authenticate, require_role
 from app.db.session import session_scope
@@ -36,6 +37,10 @@ def mlengine_client(request: Request) -> MlEngineClient:
     return request.app.state.mlengine
 
 
+def upstage_client(request: Request) -> UpstageClient:
+    return request.app.state.upstage
+
+
 def principal(request: Request, settings: Annotated[Settings, Depends(settings_dep)]) -> Principal:
     return authenticate(request, settings)
 
@@ -44,6 +49,7 @@ CurrentPrincipal = Annotated[Principal, Depends(principal)]
 Db = Annotated[AsyncSession, Depends(db_session)]
 GbSafe = Annotated[GbSafeClient, Depends(gbsafe_client)]
 MlEngine = Annotated[MlEngineClient, Depends(mlengine_client)]
+Upstage = Annotated[UpstageClient, Depends(upstage_client)]
 Config = Annotated[Settings, Depends(settings_dep)]
 
 

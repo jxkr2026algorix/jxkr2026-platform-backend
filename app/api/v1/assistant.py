@@ -10,12 +10,17 @@ GB SafeData 는 도구 정의와 시스템 프롬프트를 HTTP 로 준다. 이 
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from fastapi import APIRouter, Request
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
-from app.api.deps import CurrentPrincipal, GbSafe
+from app.api.deps import Config, CurrentPrincipal, GbSafe, Upstage
 from app.api.route import TransactionalRoute
+from app.clients.upstage import UpstageNotConfigured
+from app.services import assistant as assistant_service
 
 router = APIRouter(prefix="/assistant", tags=["assistant"], route_class=TransactionalRoute)
 
@@ -51,3 +56,64 @@ async def tools(client: GbSafe, _: CurrentPrincipal) -> Any:
 async def call_tool(name: str, request: Request, client: GbSafe, _: CurrentPrincipal) -> Any:
     params = {k: v for k, v in request.query_params.items()}
     return await client.call_tool(name, params)
+
+
+class ChatTurn(BaseModel):
+    role: str = Field(description="user | assistant")
+    content: str
+
+
+class ChatRequest(BaseModel):
+    messages: list[ChatTurn] = Field(min_length=1)
+
+
+@router.post(
+    "/chat",
+    summary="챗봇 대화 (SSE)",
+    description=(
+        "Upstage Solar 가 GB SafeData 도구를 써서 답한다. 루프가 여기 있는 이유는 정부 "
+        "인증키가 상류에 있어 브라우저가 도구를 직접 부르면 안 되기 때문이고, 도구 실패를 "
+        "모델이 '위험 없음'으로 바꾸지 못하게 하기 위해서다.\n\n"
+        "이벤트: `tool`(도구 실행 중), `notice`, `delta`(응답 조각), `done`, `error`."
+    ),
+)
+async def chat(
+    payload: ChatRequest,
+    client: GbSafe,
+    upstage: Upstage,
+    settings: Config,
+    _: CurrentPrincipal,
+) -> StreamingResponse:
+    history = [turn.model_dump() for turn in payload.messages]
+
+    async def body():
+        try:
+            async for event in assistant_service.converse(upstage, client, settings, history):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except UpstageNotConfigured as exc:
+            # 키가 없다는 사실을 화면까지 올린다. 조용한 빈 답은 '위험 없음'으로 읽힌다.
+            yield f"data: {json.dumps({'kind': 'error', 'text': str(exc)}, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            yield (
+                "data: "
+                + json.dumps(
+                    {"kind": "error", "text": f"응답을 받지 못했습니다: {exc}"},
+                    ensure_ascii=False,
+                )
+                + "\n\n"
+            )
+
+    return StreamingResponse(
+        body(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/status", summary="챗봇 사용 가능 여부")
+async def status(upstage: Upstage, _: CurrentPrincipal) -> dict:
+    """키가 없으면 화면이 입력창을 열어 두지 않도록 미리 알려 준다."""
+    return {"configured": upstage.configured, "model": upstage.model}
