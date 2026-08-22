@@ -170,3 +170,68 @@ async def test_status_says_whether_the_chatbot_can_run(client):
     body = (await client.get("/api/v1/assistant/status")).json()
     assert body["configured"] is False
     assert body["model"] == "solar-pro-4"
+
+
+# ── 훈련 상황 개시 ──────────────────────────────────────────────────────────
+#
+# 모델이 실행할 수 있는 쓰기는 이것 하나다. 실제 경보를 울릴 수 있으면 프롬프트 한 줄로
+# 주민 전체에게 대피 지시가 나간다.
+
+from app.services import drills  # noqa: E402
+
+
+def test_the_only_write_tool_says_it_is_training_only():
+    spec = drills.tool_spec()
+    assert spec["function"]["name"] == "salgil_start_drill"
+    assert "훈련 전용" in spec["function"]["description"]
+
+
+def test_the_drill_tool_constrains_the_hazard_to_an_enum():
+    """모델이 임의의 문자열로 스키마를 뚫지 못하게 한다."""
+    params = drills.tool_spec()["function"]["parameters"]
+    assert "wildfire" in params["properties"]["hazard"]["enum"]
+    assert "nuclear" not in params["properties"]["hazard"]["enum"]
+
+
+def test_evidence_carries_the_training_marker():
+    """이 표시가 빠지면 화면이 훈련과 실제를 구분할 방법이 없다."""
+    evidence = drills.drill_evidence(36.4, 129.0, "assistant")
+    assert evidence["mode"] == "training"
+    assert evidence["drill"] is True
+
+
+async def test_an_unknown_hazard_is_refused_rather_than_guessed(session):
+    result = await drills.start_drill(
+        session, hazard="asteroid", region_code="47750", region_name="청송군"
+    )
+    assert result["error"] == "unsupported_hazard"
+
+
+async def test_a_drill_is_titled_and_flagged_as_one(session):
+    result = await drills.start_drill(
+        session,
+        hazard="wildfire",
+        region_code="47750",
+        region_name="청송군",
+        lat=36.43,
+        lon=129.05,
+    )
+    assert result["drill"] is True
+    # 제목만 보고도 훈련인 것을 알 수 있어야 한다.
+    assert result["title"].startswith(drills.DRILL_TITLE_PREFIX)
+
+
+async def test_starting_a_drill_announces_it_on_the_stream(session):
+    import asyncio
+
+    from app.services.events import broker
+
+    async with broker.subscribe() as queue:
+        await drills.start_drill(
+            session, hazard="flood", region_code="47750", region_name="청송군"
+        )
+        event = await asyncio.wait_for(queue.get(), timeout=2)
+    assert event.kind == "incident.declared"
+    # 스트림에도 실린다. 화면이 상황 목록만 보고 판단하지 않도록.
+    assert event.data["drill"] is True
+    assert event.data["mode"] == "training"

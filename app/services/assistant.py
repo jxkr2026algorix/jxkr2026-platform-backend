@@ -15,11 +15,16 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.clients.gbsafe import GbSafeClient
 from app.clients.upstage import UpstageClient
 from app.core.config import Settings
+from app.services import drills
 
 logger = logging.getLogger(__name__)
+
+DRILL_TOOL_NAME = drills.tool_spec()["function"]["name"]
 
 
 def _tool_specs(raw: Any) -> list[dict[str, Any]]:
@@ -62,7 +67,12 @@ def _prompt_text(raw: Any) -> str:
     return ""
 
 
-async def _run_tool(gbsafe: GbSafeClient, name: str, arguments: str) -> str:
+async def _run_tool(
+    gbsafe: GbSafeClient,
+    name: str,
+    arguments: str,
+    session: AsyncSession | None = None,
+) -> str:
     """도구 하나를 실행하고 결과를 모델이 읽을 문자열로 만든다."""
     try:
         params = json.loads(arguments) if arguments else {}
@@ -73,6 +83,33 @@ async def _run_tool(gbsafe: GbSafeClient, name: str, arguments: str) -> str:
         )
     if not isinstance(params, dict):
         params = {}
+
+    # 유일한 쓰기 도구. 훈련만 가능하고, 실제 경보는 사람이 누른다.
+    if name == DRILL_TOOL_NAME:
+        if session is None:
+            return json.dumps(
+                {"error": "no_session", "detail": "훈련을 개시할 수 없습니다"},
+                ensure_ascii=False,
+            )
+        try:
+            return json.dumps(
+                await drills.start_drill(
+                    session,
+                    hazard=str(params.get("hazard", "")),
+                    region_code=str(params.get("region_code", "")),
+                    region_name=str(params.get("region_name", "")),
+                    lat=params.get("lat"),
+                    lon=params.get("lon"),
+                    note=params.get("note"),
+                ),
+                ensure_ascii=False,
+            )
+        except Exception as exc:
+            logger.warning("drill failed: %s", exc)
+            return json.dumps(
+                {"error": "drill_failed", "detail": str(exc)[:300]}, ensure_ascii=False
+            )
+
     try:
         result = await gbsafe.call_tool(name, {k: str(v) for k, v in params.items()})
     except Exception as exc:  # 상류 장애·권한·타임아웃 전부
@@ -97,6 +134,7 @@ async def converse(
     gbsafe: GbSafeClient,
     settings: Settings,
     history: list[dict[str, Any]],
+    session: AsyncSession | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """대화 한 턴. `{"kind": ...}` 이벤트를 순서대로 낸다.
 
@@ -106,6 +144,9 @@ async def converse(
     prompt_raw, tools_raw = await gbsafe.agent_system_prompt(), await gbsafe.tools()
     system = _prompt_text(prompt_raw)
     tools = _tool_specs(tools_raw)
+    # 훈련 개시는 우리 도구다. 상류 도구는 설계상 전부 조회 전용이다.
+    if session is not None:
+        tools.append(drills.tool_spec())
 
     messages: list[dict[str, Any]] = []
     if system:
@@ -128,7 +169,9 @@ async def converse(
             function = call.get("function") or {}
             name = function.get("name", "")
             yield {"kind": "tool", "name": name, "round": round_index + 1}
-            output = await _run_tool(gbsafe, name, function.get("arguments", ""))
+            output = await _run_tool(gbsafe, name, function.get("arguments", ""), session)
+            if name == DRILL_TOOL_NAME:
+                yield {"kind": "drill", "result": json.loads(output)}
             messages.append(
                 {
                     "role": "tool",

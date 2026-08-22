@@ -17,7 +17,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.api.deps import Config, CurrentPrincipal, GbSafe, Upstage
+from app.api.deps import Config, CurrentPrincipal, Db, GbSafe, RequireOperator, Upstage
 from app.api.route import TransactionalRoute
 from app.clients.upstage import UpstageNotConfigured
 from app.services import assistant as assistant_service
@@ -74,7 +74,9 @@ class ChatRequest(BaseModel):
         "Upstage Solar 가 GB SafeData 도구를 써서 답한다. 루프가 여기 있는 이유는 정부 "
         "인증키가 상류에 있어 브라우저가 도구를 직접 부르면 안 되기 때문이고, 도구 실패를 "
         "모델이 '위험 없음'으로 바꾸지 못하게 하기 위해서다.\n\n"
-        "이벤트: `tool`(도구 실행 중), `notice`, `delta`(응답 조각), `done`, `error`."
+        "이벤트: `tool`, `drill`(훈련 개시됨), `notice`, `delta`, `done`, `error`.\n\n"
+        "**모델이 실행할 수 있는 쓰기는 훈련 개시 하나뿐이다.** 실제 경보를 울릴 수 "
+        "있으면 프롬프트 한 줄로 주민 전체에게 대피 지시가 나간다."
     ),
 )
 async def chat(
@@ -82,13 +84,17 @@ async def chat(
     client: GbSafe,
     upstage: Upstage,
     settings: Config,
-    _: CurrentPrincipal,
+    session: Db,
+    # 훈련 개시는 쓰기다. 조회만 하는 참여자가 상황을 만들 수는 없다.
+    _: RequireOperator,
 ) -> StreamingResponse:
     history = [turn.model_dump() for turn in payload.messages]
 
     async def body():
         try:
-            async for event in assistant_service.converse(upstage, client, settings, history):
+            async for event in assistant_service.converse(
+                upstage, client, settings, history, session
+            ):
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except UpstageNotConfigured as exc:
             # 키가 없다는 사실을 화면까지 올린다. 조용한 빈 답은 '위험 없음'으로 읽힌다.
