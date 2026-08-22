@@ -13,6 +13,7 @@ from app.api.v1 import (
     public,
     routing,
     situation,
+    stream,
     tasks,
 )
 
@@ -27,5 +28,6 @@ api_router.include_router(contacts.router)
 api_router.include_router(tasks.router)
 api_router.include_router(communities.router)
 api_router.include_router(routing.router)
+api_router.include_router(stream.router)
 api_router.include_router(assistant.router)
 api_router.include_router(public.router)
