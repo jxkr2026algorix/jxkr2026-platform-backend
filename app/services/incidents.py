@@ -120,6 +120,11 @@ async def update(
 
     if changes:
         await session.flush()
+        # `updated_at` is computed by the database (`onupdate=func.now()`), so the
+        # flush expires it. Serialising the response then tried to lazy-load it
+        # outside the async context and every PATCH returned 500 — closing an
+        # incident was impossible.
+        await session.refresh(incident)
         await audit.record(
             session,
             actor=actor,

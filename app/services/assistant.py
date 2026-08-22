@@ -150,10 +150,17 @@ async def converse(
 
     messages: list[dict[str, Any]] = []
     if system:
+        # 상류 프롬프트는 조회만 설명한다. 훈련 개시 권한은 우리가 붙였으니 우리가 알린다.
+        if session is not None:
+            system += drills.SYSTEM_ADDENDUM
         messages.append({"role": "system", "content": system})
+    elif session is not None:
+        # 상류 프롬프트를 못 받았으면 조회 도구는 떼어낸다. 안전 규칙 없이 조회 도구만 있는
+        # 모델은 실패한 조회를 '이상 없음'으로 답한다. 훈련 개시는 자체 규칙이 있어 남긴다.
+        logger.warning("system prompt unavailable; keeping only the drill tool")
+        tools = [drills.tool_spec()]
+        messages.append({"role": "system", "content": drills.SYSTEM_ADDENDUM})
     else:
-        # 프롬프트를 못 받았으면 도구를 붙이지 않는다. 안전 규칙 없이 도구만 있는 모델은
-        # 실패한 조회를 '이상 없음'으로 답한다.
         logger.warning("system prompt unavailable; running without tools")
         tools = []
     messages.extend(history)

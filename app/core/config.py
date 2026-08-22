@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     upstage_api_key: str = ""
     # base URL 과 모델을 설정으로 둔 것은 스펙이 바뀌어도 배포 없이 따라가기 위해서다.
     upstage_base_url: str = "https://api.upstage.ai/v1"
-    upstage_model: str = "solar-pro-4"
+    upstage_model: str = "solar-pro4"
     # 추론 강도는 응답 시간과 직결된다. 대피 안내는 기다려 주지 않는다.
     upstage_reasoning_effort: str = "low"
     upstage_timeout_s: float = 90.0
