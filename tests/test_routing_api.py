@@ -401,3 +401,71 @@ async def test_hazard_without_a_model_is_reported_not_silently_ignored(
     assert body["prediction_used"] is True or any(
         "예측 모델이 없습니다" in w or "합성값" in w for w in body["warnings"]
     )
+
+
+async def test_a_hazard_with_no_shelter_axis_states_the_limit(
+    client, seeded, geo_fixtures, road_network, session
+):
+    """지진은 발생을 알려주지만 어느 대피소로 보낼지 모른다.
+
+    그건 계산 실패가 아니라 알려진 한계다. 404 로 던지면 화면이 "경로를 계산하지
+    못했습니다"라고만 말하고, 담당자는 없는 데이터를 찾으러 간다.
+    """
+    # 지진 대피소를 지운다 — 공개 데이터에 실제로 없는 상태를 만든다.
+    await session.delete(geo_fixtures["quake"])
+    await session.commit()
+
+    response = await client.post(
+        "/api/v1/routing/evacuation",
+        json={
+            "community_id": str(geo_fixtures["community"].id),
+            "hazard": "earthquake",
+            "use_prediction": False,
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    assert body["shelter_guidance_available"] is False
+    assert body["hazard_limitation"]
+    assert body["routes"] == []
+    assert body["recommended"] is None
+    assert any(body["hazard_limitation"] == w for w in body["warnings"])
+
+
+async def test_the_limit_is_reported_even_when_a_shelter_happens_to_exist(
+    client, seeded, geo_fixtures, road_network, session
+):
+    """대피소가 등록돼 있어도 '갈 곳을 말할 수 없다'는 사실은 남는다.
+
+    누군가 지진 대피소를 넣어 두었다고 해서 공개 데이터의 한계가 사라지는 것은 아니다.
+    """
+    body = (
+        await client.post(
+            "/api/v1/routing/evacuation",
+            json={
+                "community_id": str(geo_fixtures["community"].id),
+                "hazard": "earthquake",
+                "use_prediction": False,
+            },
+        )
+    ).json()
+    assert body["shelter_guidance_available"] is False
+    assert body["hazard_limitation"]
+    # 등록된 대피소가 있으므로 경로 자체는 계산된다
+    assert body["routes"]
+
+
+async def test_a_hazard_that_can_guide_is_not_flagged(client, seeded, geo_fixtures, road_network):
+    body = (
+        await client.post(
+            "/api/v1/routing/evacuation",
+            json={
+                "community_id": str(geo_fixtures["community"].id),
+                "hazard": "wildfire",
+                "use_prediction": False,
+            },
+        )
+    ).json()
+    assert body["shelter_guidance_available"] is True
+    assert body["hazard_limitation"] is None

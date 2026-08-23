@@ -99,6 +99,14 @@ class RoutePlan(BaseModel):
         default=None, description="가장 빠른 경로의 대피소. 없으면 null"
     )
 
+    # 이 재난에 대해 '어디로 가라'를 말할 수 있는가.
+    # 지진은 발생을 알려주지만 갈 곳을 모른다 — 그건 계산 실패가 아니라 알려진 한계다.
+    shelter_guidance_available: bool = True
+    hazard_limitation: str | None = Field(
+        default=None,
+        description="대피소를 안내할 수 없는 재난일 때 그 사유. 화면에 그대로 띄운다",
+    )
+
     prediction_used: bool = False
     prediction_id: str | None = None
     prediction_model: str | None = None

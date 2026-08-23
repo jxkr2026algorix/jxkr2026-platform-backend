@@ -20,6 +20,7 @@ from functools import lru_cache
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.clients.gbsafe import GbSafeClient
 from app.clients.mlengine import RECIPE_FOR_HAZARD, MlEngineClient
 from app.core.config import Settings
 from app.core.errors import NotFoundError, UpstreamError, ValidationError
@@ -38,7 +39,7 @@ from app.routing.planner import plan_route
 from app.routing.profiles import TransportMode, profile_for
 from app.schemas.prediction import PredictionRequest
 from app.schemas.routing import BlockedSegment, RouteLeg, RoutePlan, RouteRequest
-from app.services import communities
+from app.services import communities, situation
 
 log = get_logger(__name__)
 
@@ -274,11 +275,37 @@ def _hazard_channel(hazard: str, result) -> int | None:
     return None
 
 
+async def _hazard_limitation(
+    gbsafe: GbSafeClient | None, hazard: str, warnings: list[str]
+) -> str | None:
+    """이 재난에 '어디로 가라'를 말할 수 있는가.
+
+    지진은 발생을 알려주지만 어느 대피소로 보낼지 모른다. 대피소가 없는 것과
+    **애초에 갈 곳을 말할 수 없는 것**은 다르다 — 앞은 데이터 누락이고 뒤는 알려진
+    한계다. 둘을 같은 404 로 묶으면 화면이 "계산 실패"라고만 말하고, 담당자는 없는
+    데이터를 찾으러 간다.
+    """
+    if gbsafe is None:
+        return None
+    try:
+        capability = await situation.capability_for(gbsafe, hazard)
+    except UpstreamError as exc:
+        warnings.append(f"재난 가용성을 확인하지 못했습니다: {exc.detail[:100]}")
+        return None
+    if capability is None or capability.can_say_where_to_go:
+        return None
+    return capability.caveat or (
+        f"{capability.korean_name}은(는) 발생은 확인되지만 어느 대피소로 보낼지 "
+        "말할 수 있는 공개 데이터가 없습니다 (가용성 partial)"
+    )
+
+
 async def plan_evacuation(
     session: AsyncSession,
     client: MlEngineClient,
     settings: Settings,
     payload: RouteRequest,
+    gbsafe: GbSafeClient | None = None,
 ) -> RoutePlan:
     warnings: list[str] = []
     profile = profile_for(payload.mode)
@@ -323,7 +350,31 @@ async def plan_evacuation(
         )
         candidates = [(shelter, distance)]
 
+    limitation = await _hazard_limitation(gbsafe, payload.hazard, warnings)
+
     if not candidates:
+        if limitation is not None:
+            # 계산 실패가 아니라 알려진 한계다. 200 으로 돌려주되 경로가 없다는 것과
+            # 그 이유를 분명히 한다 — 화면이 "가까운 대피소가 없다"로 읽으면 안 된다.
+            return RoutePlan(
+                origin={
+                    "lat": lat,
+                    "lon": lon,
+                    "community_id": str(origin_community.id) if origin_community else None,
+                    "community_name": origin_community.name if origin_community else None,
+                },
+                hazard=payload.hazard,
+                mode=payload.mode,
+                mode_name=profile.korean_name,
+                mode_note=profile.note or None,
+                routes=[],
+                recommended=None,
+                shelter_guidance_available=False,
+                hazard_limitation=limitation,
+                road_network=graph.source,
+                warnings=[*warnings, limitation],
+                generated_at=datetime.now(UTC),
+            )
         raise NotFoundError(
             f"{payload.hazard} 에 쓸 수 있는 대피소가 없습니다 — "
             "대피소가 등록되지 않았거나 이 재난을 담당하는 시설이 없습니다"
@@ -420,6 +471,8 @@ async def plan_evacuation(
         mode=payload.mode,
         mode_name=profile.korean_name,
         mode_note=profile.note or None,
+        shelter_guidance_available=limitation is None,
+        hazard_limitation=limitation,
         routes=legs,
         recommended=recommended,
         prediction_used=hazard_field.has_prediction,

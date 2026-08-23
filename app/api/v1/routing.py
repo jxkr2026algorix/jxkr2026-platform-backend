@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.deps import Config, CurrentPrincipal, Db, MlEngine, RequireOperator
+from app.api.deps import Config, CurrentPrincipal, Db, GbSafe, MlEngine, RequireOperator
 from app.api.route import TransactionalRoute
 from app.routing.profiles import PROFILES
 from app.schemas.routing import ModeCatalog, ModeInfo, RoutePlan, RouteRequest
@@ -65,7 +65,8 @@ async def plan_evacuation_route(
     payload: RouteRequest,
     session: Db,
     client: MlEngine,
+    gbsafe: GbSafe,
     settings: Config,
     _: RequireOperator,
 ) -> RoutePlan:
-    return await routing.plan_evacuation(session, client, settings, payload)
+    return await routing.plan_evacuation(session, client, settings, payload, gbsafe)
