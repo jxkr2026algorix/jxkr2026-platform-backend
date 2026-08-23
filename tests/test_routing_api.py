@@ -356,8 +356,15 @@ async def test_spreading_wildfire_changes_the_route(client, seeded, geo_fixtures
     assert delayed["max_risk"] < 0.5
 
 
-async def test_stub_prediction_is_flagged_in_the_route(client, seeded, geo_fixtures, road_network):
-    """stub 예측으로 만든 회피는 형상 확인 이상의 의미가 없다."""
+async def test_synthetic_prediction_does_not_close_roads(
+    client, seeded, geo_fixtures, road_network
+):
+    """합성 입력으로 만든 위험장은 길을 막지 않는다.
+
+    모델은 돌았지만 입력이 관측이 아니라, 그 출력은 불이 어디 있는지 말해 주지 않는다.
+    그런 값으로 도로를 차단하면 '경로 없음'이라는 확신에 찬 오답이 나간다 —
+    실제로는 '모른다'인데. 배포에서 모든 재난의 대피 경로가 그렇게 사라졌다.
+    """
     body = (
         await client.post(
             "/api/v1/routing/evacuation",
@@ -370,7 +377,12 @@ async def test_stub_prediction_is_flagged_in_the_route(client, seeded, geo_fixtu
         )
     ).json()
     assert body["prediction_is_stub"] is True
-    assert any("stub" in w for w in body["warnings"])
+    assert body["feature_mode"] == "synthetic"
+    assert any("합성값" in w for w in body["warnings"])
+
+    leg = next(x for x in body["routes"] if x["shelter_name"] == "가까운 대피소")
+    assert leg["found"] is True
+    assert leg["avoided_edges"] == 0
 
 
 async def test_hazard_without_a_model_is_reported_not_silently_ignored(
@@ -387,5 +399,5 @@ async def test_hazard_without_a_model_is_reported_not_silently_ignored(
         )
     ).json()
     assert body["prediction_used"] is True or any(
-        "예측 모델이 없습니다" in w for w in body["warnings"]
+        "예측 모델이 없습니다" in w or "합성값" in w for w in body["warnings"]
     )

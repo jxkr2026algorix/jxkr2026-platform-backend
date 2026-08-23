@@ -206,18 +206,35 @@ async def _hazard_field(
             "덮는 범위가 다르면 위험이 엉뚱한 곳에 놓입니다"
         )
 
+    feature_mode = meta.get("feature_mode")
+    synthetic = feature_mode in ("synthetic", None) or bool(meta.get("is_stub"))
+
+    if slices and synthetic:
+        # **합성 입력으로 만든 위험장은 길을 막지 않는다.**
+        #
+        # 모델은 돌았지만 입력이 관측이 아니라 합성값이라, 그 출력은 불이 어디 있는지
+        # 말해 주지 않는다. 그런 값으로 도로를 차단하면 "경로가 없습니다"라는 확신에 찬
+        # 오답이 나간다 — 실제로는 '모른다'인데.
+        #
+        # 조회 실패를 '위험 없음'으로 읽으면 안 되는 것과 같은 이유로, 모르는 것을
+        # '위험함'으로 읽어도 안 된다. 어느 쪽이든 관측하지 않은 것을 단정하는 일이다.
+        #
+        # 배포에서 이 값이 격자 중심(=출발지)에 봉우리를 만들어, 주민이 늘 불 한가운데
+        # 서 있는 것으로 계산됐다. 모든 재난에서 대피 경로가 나오지 않았다.
+        slices = []
+        warnings.append(
+            f"예측 입력이 합성값입니다 (feature_mode={feature_mode}) — 모델이 돌긴 했지만 "
+            "그 출력은 불이 어디 있는지 말해 주지 않아, 확산을 경로에 반영하지 않았습니다. "
+            "현장 보고의 통제 구간만 반영됩니다"
+        )
+
     field = HazardField(
         slices=slices,
         hazard=hazard,
         model=meta.get("model"),
-        feature_mode=meta.get("feature_mode"),
+        feature_mode=feature_mode,
         is_stub=bool(meta.get("is_stub")),
     )
-    if field.is_stub:
-        warnings.append(
-            "예측이 stub 입니다 — 학습된 모델이 아니라 합성값이라, 이 경로의 위험 회피는 "
-            "형상 확인 이상의 의미가 없습니다"
-        )
     return field, meta
 
 

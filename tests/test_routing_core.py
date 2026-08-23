@@ -129,12 +129,33 @@ def test_hazard_is_monotone_in_time(graph):
     assert field.risk_at(BASE_LAT, BASE_LON, 60 * 60) == pytest.approx(0.9)
 
 
-def test_no_route_says_why_instead_of_returning_empty(graph):
-    """전부 막히면 빈 경로가 아니라 사유를 준다."""
+def test_standing_in_the_hazard_is_said_plainly(graph):
+    """출발 지점이 이미 위험하면 '길이 없다'로 뭉뚱그리지 않는다.
+
+    현장에서 할 일이 다르다 — 우회로를 찾는 것과 그 자리를 벗어나는 것.
+    """
     result = plan_route(
         graph,
         profile_for(TransportMode.FOOT),
         _hazard({0: [0.99] * 9}),
+        HazardPolicy(block_threshold=0.5),
+        origin=(BASE_LAT, BASE_LON),
+        destination=(BASE_LAT + 2 * STEP, BASE_LON + 2 * STEP),
+    )
+    assert not result.found
+    assert result.coordinates == []
+    assert "출발 지점이 이미 위험" in result.reason
+
+
+def test_no_detour_says_why_instead_of_returning_empty(graph):
+    """출발지는 안전한데 사방이 막힌 경우 — 빈 경로가 아니라 사유를 준다."""
+    # 왼쪽 아래 칸(행 2, 열 0)만 안전하고 나머지는 통행 불가.
+    values = [0.99] * 9
+    values[2 * 3 + 0] = 0.0
+    result = plan_route(
+        graph,
+        profile_for(TransportMode.FOOT),
+        _hazard({0: values}),
         HazardPolicy(block_threshold=0.5),
         origin=(BASE_LAT, BASE_LON),
         destination=(BASE_LAT + 2 * STEP, BASE_LON + 2 * STEP),

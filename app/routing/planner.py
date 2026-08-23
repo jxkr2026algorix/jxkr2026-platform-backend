@@ -81,6 +81,19 @@ def plan_route(
             blocked_by_reports=[blocked_start],
         )
 
+    # 출발 지점 자체가 위험 구역이면 일반적인 "길이 없습니다"로 뭉뚱그리지 않는다.
+    # 그 둘은 현장에서 할 일이 다르다 — 우회로를 찾는 것과 그 자리를 벗어나는 것.
+    start_risk = hazard.risk_at(start[0], start[1], depart_after_s)
+    if policy.edge_multiplier(start_risk) is None:
+        return RouteResult(
+            found=False,
+            reason=(
+                f"출발 지점이 이미 위험 구역입니다 (위험도 {start_risk:.2f} ≥ "
+                f"{policy.block_threshold:.2f}) — 경로를 계산할 수 있는 상태가 아닙니다"
+            ),
+            max_risk=round(start_risk, 5),
+        )
+
     # (도착시각, 노드)
     queue: list[tuple[float, NodeId]] = [(depart_after_s, start)]
     best: dict[NodeId, float] = {start: depart_after_s}
