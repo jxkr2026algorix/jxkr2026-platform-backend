@@ -82,6 +82,15 @@ class PredictionRequest(BaseModel):
     as_of: datetime | None = Field(default=None, description="이 시각 기준으로 조립. 없으면 현재")
     horizon_minutes: int | None = Field(default=None, ge=0, le=72 * 60)
     grid: GridSpec | None = None
+    # 격자가 덮어야 할 지도상 범위. **형상은 모델이 정하고 범위는 호출자가 정한다** —
+    # 호출자는 모델의 격자 크기를 미리 모르므로 grid 로는 범위를 줄 수 없다.
+    #
+    # 주지 않으면 응답에도 범위가 없고, 받는 쪽은 격자가 어디에 놓이는지 추측하게 된다.
+    # 추측이 틀리면 위험 구역이 실제와 다른 자리에 그려지고 경로가 엉뚱한 길을 피한다.
+    bbox: list[float] | None = Field(
+        default=None, description="[minlon, minlat, maxlon, maxlat] — WGS84"
+    )
+    crs: str | None = Field(default=None, description="bbox 의 좌표계. 기본 EPSG:4326")
     inputs: list[TensorPayload] | None = None
     model_version: str | None = Field(default=None, description="없으면 서버 기본 버전")
     threshold: float | None = Field(default=None, ge=0.0, le=1.0)

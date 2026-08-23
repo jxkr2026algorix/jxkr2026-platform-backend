@@ -135,10 +135,17 @@ async def _hazard_field(
         )
         return HazardField(), {}
 
+    # 요청할 범위. 대피 반경보다 넉넉해야 경로가 격자 밖으로 나가지 않는다.
     assumed_bbox = bbox_around(lat, lon, PREDICTION_RADIUS_M)
     slices = []
     meta: dict = {}
     assumed_georeference = False
+
+    # 덮어야 할 범위를 **요청에 실어** 보낸다. 그러면 응답의 격자가 어디에 놓이는지
+    # 추측할 필요가 없다. 예전에는 여기서 6km 를 가정했고, 가정이 틀리면 위험 구역이
+    # 실제와 다른 자리에 그려졌다.
+    min_lat, min_lon, max_lat, max_lon = assumed_bbox
+    requested_bbox = [min_lon, min_lat, max_lon, max_lat]
 
     for horizon in sorted(set(horizons)):
         request = PredictionRequest(
@@ -146,6 +153,8 @@ async def _hazard_field(
             region_code=region_code,
             hazard=hazard,
             horizon_minutes=horizon,
+            bbox=requested_bbox,
+            crs="EPSG:4326",
         )
         try:
             result = await client.predict(request)
@@ -192,9 +201,9 @@ async def _hazard_field(
 
     if assumed_georeference:
         warnings.append(
-            f"예측 격자에 좌표 범위(grid.bbox)가 없어 출발지 중심 반경 "
-            f"{PREDICTION_RADIUS_M / 1000:.0f}km 로 **가정**해 배치했습니다 — 모델이 실제로 "
-            "덮는 범위가 다르면 위험이 엉뚱한 곳에 놓입니다. ML 서버가 bbox 를 실어야 합니다"
+            "예측 응답에 좌표 범위(grid.bbox)가 없어 요청한 범위로 **가정**해 배치했습니다 "
+            "— ML 서버가 요청의 bbox 를 응답에 되돌려주지 않고 있습니다. 모델이 실제로 "
+            "덮는 범위가 다르면 위험이 엉뚱한 곳에 놓입니다"
         )
 
     field = HazardField(

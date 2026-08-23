@@ -12,7 +12,7 @@ import json
 import pytest
 
 from app.clients.upstage import UpstageClient, UpstageNotConfigured
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.services.assistant import _prompt_text, _run_tool, _tool_specs, converse
 
 
@@ -169,7 +169,8 @@ async def test_chat_endpoint_reports_a_missing_key_instead_of_answering(client):
 async def test_status_says_whether_the_chatbot_can_run(client):
     body = (await client.get("/api/v1/assistant/status")).json()
     assert body["configured"] is False
-    assert body["model"] == "solar-pro-4"
+    # 설정 기본값과 같아야 한다. 어긋나면 실제로 부르는 모델과 다른 이름을 검증하게 된다.
+    assert body["model"] == Settings().upstage_model
 
 
 # ── 훈련 상황 개시 ──────────────────────────────────────────────────────────
