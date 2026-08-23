@@ -32,6 +32,7 @@ from app.routing.hazard import (
     HazardPolicy,
     bbox_around,
     slice_from_grid,
+    to_probability,
 )
 from app.routing.planner import plan_route
 from app.routing.profiles import TransportMode, profile_for
@@ -173,7 +174,7 @@ async def _hazard_field(
                     height=result.grid.height,
                     width=result.grid.width,
                     bbox=bbox,
-                    values=tensor.data,
+                    values=to_probability(tensor.name, tensor.data),
                     channel=_hazard_channel(hazard, result),
                     channel_count=channels,
                 )

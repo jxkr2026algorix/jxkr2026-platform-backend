@@ -143,6 +143,29 @@ complete && absence_confirmed 이면       → NONE
 `partial` 재난(지진·폭염 등)을 여기에 넣지 않은 이유가 있다 — 첫 화면에 나란히 놓이면
 "다 대응된다"로 읽힌다. **지진은 발생을 알려주지만 어느 대피소로 보낼지 모른다.**
 
+### `GET /situation/weather?region=`
+
+기상청 실황·단기예보를 시군 하나 분으로 추려 준다. 기온·습도·풍속·풍향·강수를 꺼내 두고
+나머지 관측은 `readings` 로 함께 나간다.
+
+```jsonc
+{
+  "state": "DATA",
+  "temperature_c": 24.6, "humidity_pct": 96.0,
+  "wind_speed_ms": 0.4, "wind_direction_deg": 194.0, "rainfall_1h_mm": 0.0,
+  "observed_at": "2026-08-23T08:00:00+09:00",
+  "stale": false,
+  "attribution": "기상청 「기상청 단기예보」 · KOGL-1 · …",
+  "caveats": ["관측지점이 마을에서 3.2km 떨어져 있습니다"]
+}
+```
+
+**값이 없으면 지어내지 않는다.** `state=UNVERIFIED` 는 못 읽은 것이고, 화면이 그걸 '맑음'이나
+0 으로 그리면 조회 실패가 안전으로 읽힌다. 강수 `null` 과 강수 `0.0` 은 다른 뜻이다.
+
+`stale=true` 면 갱신주기를 넘긴 값이므로 `observed_at` 을 함께 띄운다. `attribution` 은
+KOGL 출처 표기라 화면에서 지우면 안 된다.
+
 ### `GET /situation/sources/{connector}`, `GET /situation/health`
 
 원천 하나 직접 조회 / 원천별 상태와 사유.

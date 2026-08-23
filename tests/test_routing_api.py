@@ -271,8 +271,11 @@ async def test_spreading_wildfire_changes_the_route(client, seeded, geo_fixtures
         import json as _json
 
         horizon = _json.loads(request.content).get("horizon_minutes", 0)
-        centre = 0.95 if horizon >= 30 else 0.0
-        values = [0.0, 0.0, 0.0, 0.0, centre, 0.0, 0.0, 0.0, 0.0]
+        # 모델은 **로짓**을 낸다 (`logits` 텐서). 확률을 그대로 보내면 실제 계약과
+        # 다른 것을 검증하게 된다 — 배포에서 정확히 그 착오로 모든 길이 막혔다.
+        centre = 8.0 if horizon >= 30 else -8.0  # 시그모이드 후 ≈1.0 / ≈0.0
+        safe = -8.0
+        values = [safe, safe, safe, safe, centre, safe, safe, safe, safe]
         return httpx.Response(
             200,
             json={

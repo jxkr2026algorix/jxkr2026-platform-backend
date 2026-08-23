@@ -66,9 +66,7 @@ async def situation_stream(
     ),
 ) -> StreamingResponse:
     async def body():
-        async for chunk in broker.stream(
-            str(incident_id) if incident_id else None
-        ):
+        async for chunk in broker.stream(str(incident_id) if incident_id else None):
             if await request.is_disconnected():
                 break
             yield chunk
@@ -91,9 +89,7 @@ async def situation_stream(
     summary="내 화면 상태를 공유한다",
     description="구역·시나리오·2D/3D 를 다른 화면이 따라올 수 있게 방송한다.",
 )
-async def publish_render_state(
-    payload: RenderState, _: RequireOperator
-) -> dict:
+async def publish_render_state(payload: RenderState, _: RequireOperator) -> dict:
     broker.publish(
         Event(
             kind="render.state",
@@ -124,9 +120,7 @@ async def start_spread(
     # 실패를 알릴 곳이 없고, 화면은 오지 않을 프레임을 기다린다.
     predictions.recipe_for_hazard(payload.hazard)
     horizons = (
-        tuple(payload.horizons_minutes)
-        if payload.horizons_minutes
-        else spread.DEFAULT_HORIZONS
+        tuple(payload.horizons_minutes) if payload.horizons_minutes else spread.DEFAULT_HORIZONS
     )
     background.add_task(
         spread.run_spread,

@@ -78,18 +78,14 @@ class EventBroker:
         finally:
             self._subscribers.discard(queue)
 
-    async def stream(
-        self, incident_id: str | None = None
-    ) -> AsyncIterator[str]:
+    async def stream(self, incident_id: str | None = None) -> AsyncIterator[str]:
         """SSE 본문. 하트비트를 섞어 유휴 연결이 끊기지 않게 한다."""
         async with self.subscribe() as queue:
             # 연결 직후 한 번 알려 준다 — 화면이 "연결됨"을 스스로 판단하지 않도록.
             yield Event(kind="stream.open", data={"ok": True}).encode()
             while True:
                 try:
-                    event = await asyncio.wait_for(
-                        queue.get(), timeout=HEARTBEAT_SECONDS
-                    )
+                    event = await asyncio.wait_for(queue.get(), timeout=HEARTBEAT_SECONDS)
                 except TimeoutError:
                     yield ": keep-alive\n\n"
                     continue

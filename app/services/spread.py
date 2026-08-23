@@ -50,14 +50,10 @@ class SpreadWindow:
 
 def encode_values(values: list[float]) -> str:
     """float32 리틀엔디언 배열을 base64 로. JSON 숫자 배열보다 6배 작다."""
-    return base64.b64encode(
-        struct.pack(f"<{len(values)}f", *values)
-    ).decode("ascii")
+    return base64.b64encode(struct.pack(f"<{len(values)}f", *values)).decode("ascii")
 
 
-def frame_from_result(
-    result: PredictionResult, window: SpreadWindow, hazard: str
-) -> dict | None:
+def frame_from_result(result: PredictionResult, window: SpreadWindow, hazard: str) -> dict | None:
     """추론 결과를 프론트가 그릴 수 있는 한 프레임으로."""
     grid = result.grid
     if grid is None or not result.outputs:
@@ -88,9 +84,7 @@ def frame_from_result(
         "is_derived": True,
         "is_stub": result.is_stub,
         "feature_mode": result.feature_mode.value,
-        "derived_notice": result.derived_notice
-        if hasattr(result, "derived_notice")
-        else None,
+        "derived_notice": result.derived_notice if hasattr(result, "derived_notice") else None,
     }
 
 
@@ -140,9 +134,7 @@ async def run_spread(
         frame = frame_from_result(result, window, hazard)
         if frame is None:
             continue
-        broker.publish(
-            Event(kind="prediction.frame", data=frame, incident_id=incident_id)
-        )
+        broker.publish(Event(kind="prediction.frame", data=frame, incident_id=incident_id))
         sent += 1
         # 다음 시점 전에 이벤트 루프를 놓아 준다.
         await asyncio.sleep(0)

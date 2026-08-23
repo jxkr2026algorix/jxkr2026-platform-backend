@@ -227,9 +227,7 @@ async def test_starting_a_drill_announces_it_on_the_stream(session):
     from app.services.events import broker
 
     async with broker.subscribe() as queue:
-        await drills.start_drill(
-            session, hazard="flood", region_code="47750", region_name="청송군"
-        )
+        await drills.start_drill(session, hazard="flood", region_code="47750", region_name="청송군")
         event = await asyncio.wait_for(queue.get(), timeout=2)
     assert event.kind == "incident.declared"
     # 스트림에도 실린다. 화면이 상황 목록만 보고 판단하지 않도록.

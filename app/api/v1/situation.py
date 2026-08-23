@@ -10,7 +10,12 @@ from sqlalchemy import func, select
 from app.api.deps import CurrentPrincipal, Db, GbSafe
 from app.api.route import TransactionalRoute
 from app.db.models import Incident
-from app.schemas.situation import SituationContext, SituationOverview, SourceProbe
+from app.schemas.situation import (
+    SituationContext,
+    SituationOverview,
+    SourceProbe,
+    WeatherSnapshot,
+)
 from app.services import situation
 
 router = APIRouter(prefix="/situation", tags=["situation"], route_class=TransactionalRoute)
@@ -82,6 +87,27 @@ async def probe_source(
         state=envelope.state,
         fetched_at=datetime.now(UTC),
     )
+
+
+@router.get(
+    "/weather",
+    response_model=WeatherSnapshot,
+    summary="현재 기상 — 화면이 바로 쓰는 모양",
+    description=(
+        "기상청 실황·단기예보를 시군 하나 분으로 추려 준다. 기온·습도·풍속·강수는 "
+        "꺼내 두고, 나머지 관측은 `readings` 로 함께 나간다.\n\n"
+        "**값이 없으면 지어내지 않는다.** `state=UNVERIFIED` 면 못 읽은 것이고, 화면은 "
+        "그걸 '맑음'이나 0 으로 그리면 안 된다. `stale=true` 면 갱신주기를 넘긴 값이므로 "
+        "`observed_at` 을 함께 띄워야 한다.\n\n"
+        "`attribution` 은 출처 표기 문구다 — KOGL 이므로 화면에서 지우면 안 된다."
+    ),
+)
+async def get_weather(
+    client: GbSafe,
+    _: CurrentPrincipal,
+    region: str = Query(description="경북 시군 (예: 청송군)"),
+) -> WeatherSnapshot:
+    return await situation.weather(client, region_query=region)
 
 
 @router.get("/health", summary="상류 원천 상태 — 무엇이 왜 안 되는지")

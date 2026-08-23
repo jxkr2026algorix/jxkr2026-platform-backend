@@ -265,9 +265,7 @@ class TestContraction:
         graph = self._load(tmp_path, payload)
 
         coords = payload["features"][0]["geometry"]["coordinates"]
-        expected = sum(
-            haversine_m(a[1], a[0], b[1], b[0]) for a, b in pairwise(coords)
-        )
+        expected = sum(haversine_m(a[1], a[0], b[1], b[0]) for a, b in pairwise(coords))
         total = sum(e.length_m for edges in graph.nodes.values() for e in edges) / 2
         assert total == pytest.approx(expected, rel=0.001)
 
@@ -434,3 +432,55 @@ class TestGraphLoadingDoesNotBlockTheLoop:
 
         assert len(graph) > 0
         assert ticks > 5, f"그래프를 읽는 동안 루프가 멈췄습니다 (틱 {ticks}회)"
+
+
+def test_logits_are_converted_before_thresholding():
+    """모델 출력은 로짓이다. 확률로 오인하면 임계값의 뜻이 통째로 달라진다.
+
+    로짓 3.0 은 확률 0.95 인데, 그대로 임계 0.8 과 비교하면 차단이고 임계를 0.99 로
+    올려도 여전히 차단이라 **모든 길이 막힌 것처럼 보인다.** 실제로 배포에서 그렇게 났다.
+    """
+    from app.routing.hazard import to_probability
+
+    assert to_probability("logits", [0.0])[0] == pytest.approx(0.5)
+    assert to_probability("logits", [3.0])[0] == pytest.approx(0.9526, abs=1e-4)
+    assert to_probability("logits", [-3.0])[0] == pytest.approx(0.0474, abs=1e-4)
+    assert to_probability("rain_coarse_logits", [0.0])[0] == pytest.approx(0.5)
+
+
+def test_probability_outputs_pass_through_unchanged():
+    """이미 확률인 헤드에 시그모이드를 또 씌우면 0.5 쪽으로 눌린다."""
+    from app.routing.hazard import to_probability
+
+    assert to_probability("probabilities", [0.1, 0.9]) == [0.1, 0.9]
+    assert to_probability("intensity", [0.0, 1.0]) == [0.0, 1.0]
+
+
+def test_extreme_logits_saturate_without_overflow():
+    from app.routing.hazard import to_probability
+
+    assert to_probability("logits", [1000.0])[0] == 1.0
+    assert to_probability("logits", [-1000.0])[0] == 0.0
+
+
+def test_a_logit_grid_does_not_block_every_road(graph):
+    """배포에서 난 증상 그대로: 로짓을 그대로 쓰면 임계를 올려도 전부 막힌다."""
+    from app.routing.hazard import to_probability
+
+    # 로짓 2.0 = 확률 0.88. 임계 0.95 면 통과해야 한다.
+    raw = [2.0] * 9
+    as_probability = to_probability("logits", raw)
+
+    wrong = _hazard({0: raw})
+    right = _hazard({0: as_probability})
+    policy = HazardPolicy(block_threshold=0.95)
+    kwargs = dict(
+        origin=(BASE_LAT, BASE_LON),
+        destination=(BASE_LAT + 2 * STEP, BASE_LON + 2 * STEP),
+    )
+
+    blocked = plan_route(graph, profile_for(TransportMode.FOOT), wrong, policy, **kwargs)
+    ok = plan_route(graph, profile_for(TransportMode.FOOT), right, policy, **kwargs)
+
+    assert not blocked.found  # 로짓 2.0 >= 0.95 로 읽혀 전부 막힌다
+    assert ok.found  # 확률 0.88 < 0.95 라 지날 수 있다

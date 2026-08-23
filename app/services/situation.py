@@ -11,7 +11,13 @@ from app.core.logging import get_logger
 from app.schemas.common import DataState, Envelope
 from app.schemas.hazard import Hazard, HazardCapability, Readiness, korean_name, map_scenario
 from app.schemas.meta import CapabilityMatrix, Region, ResolvedRegion
-from app.schemas.situation import HazardSnapshot, SituationContext, SituationOverview
+from app.schemas.situation import (
+    HazardSnapshot,
+    SituationContext,
+    SituationOverview,
+    WeatherReading,
+    WeatherSnapshot,
+)
 
 log = get_logger(__name__)
 
@@ -110,6 +116,81 @@ async def context(
 
 async def _none() -> None:
     return None
+
+
+# 화면이 바로 쓰는 값들. 나머지 관측도 readings 로 함께 나간다.
+_HEADLINE_KINDS = {
+    "temperature": "temperature_c",
+    "humidity": "humidity_pct",
+    "wind_speed": "wind_speed_ms",
+    "wind_direction": "wind_direction_deg",
+    "rainfall_1h": "rainfall_1h_mm",
+}
+
+
+async def weather(client: GbSafeClient, *, region_query: str) -> WeatherSnapshot:
+    """시군 하나의 현재 기상.
+
+    `weather_now` 커넥터의 봉투를 화면이 쓰기 좋게 추린다. 값이 없으면 지어내지 않고
+    `state` 로 말한다 — 하드코딩된 데모 값을 대체하려고 만든 것이라, 여기서 다시
+    그럴듯한 기본값을 채우면 만든 이유가 없어진다.
+    """
+    resolved = await resolve_region(client, region_query)
+    region_name = resolved.name or region_query
+    envelope = await client.source("weather_now", region=region_name)
+
+    readings: list[WeatherReading] = []
+    headline: dict[str, float] = {}
+    observed: datetime | None = None
+    stale = False
+
+    for record in envelope.records:
+        payload = record.payload or {}
+        kind = str(payload.get("kind", "")) or None
+        if kind is None:
+            continue
+        freshness = record.freshness
+        record_stale = bool(freshness and freshness.status == "stale")
+        stale = stale or record_stale
+
+        value = payload.get("value")
+        try:
+            numeric = float(value) if value is not None else None
+        except (TypeError, ValueError):
+            numeric = None
+
+        readings.append(
+            WeatherReading(
+                kind=kind,
+                value=numeric,
+                unit=payload.get("unit"),
+                station=payload.get("station"),
+                observed_at=freshness.as_of if freshness else None,
+                is_forecast=bool(payload.get("is_forecast")),
+                stale=record_stale,
+            )
+        )
+        if kind in _HEADLINE_KINDS and numeric is not None:
+            headline[_HEADLINE_KINDS[kind]] = numeric
+        if freshness and freshness.as_of and (observed is None or freshness.as_of > observed):
+            observed = freshness.as_of
+
+    citation = envelope.citations[0] if envelope.citations else None
+    source = envelope.records[0].source if envelope.records else None
+
+    return WeatherSnapshot(
+        region=resolved,
+        state=envelope.state,
+        readings=readings,
+        observed_at=observed,
+        stale=stale,
+        caveats=envelope.caveats,
+        attribution=(citation.text if citation else None)
+        or (source.attribution if source else None),
+        source_url=source.source_url if source else None,
+        fetched_at=datetime.now(UTC),
+        **headline,
+    )
 
 
 async def overview(

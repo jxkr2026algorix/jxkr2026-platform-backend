@@ -134,6 +134,33 @@ class HazardPolicy:
         return 1.0 + ratio * (self.avoid_penalty - 1.0)
 
 
+def to_probability(tensor_name: str, values: list[float]) -> list[float]:
+    """모델 출력을 0..1 확률로 맞춘다.
+
+    **내보낸 그래프는 로짓을 낸다.** `jxkr-export-onnx` 가 로짓 헤드를 `logits` /
+    `*_logits` 로 이름 짓고, 게이트웨이의 `summary` 는 시그모이드를 씌우지만
+    `outputs` 의 원본 텐서는 로짓 그대로다.
+
+    로짓을 확률로 오인하면 임계값의 뜻이 통째로 달라진다. 로짓 3.0 은 확률 0.95 인데
+    임계 0.8 과 비교하면 차단이고, 임계를 0.99 로 올려도 여전히 차단이라 **모든 길이
+    막힌 것처럼 보인다.** 실제로 그렇게 나갔다.
+
+    이름으로 판단하는 것은 게이트웨이의 `_is_logits` 와 같은 규칙이다. 사람이 유지하는
+    플래그를 따로 두면 계약이 바뀔 때 같이 바뀌지 않는다.
+    """
+    if not (tensor_name == "logits" or tensor_name.endswith("_logits")):
+        return list(values)
+    return [_sigmoid(value) for value in values]
+
+
+def _sigmoid(value: float) -> float:
+    if value > 50:
+        return 1.0
+    if value < -50:
+        return 0.0
+    return 1.0 / (1.0 + math.exp(-value))
+
+
 def slice_from_grid(
     *,
     horizon_minutes: int,
